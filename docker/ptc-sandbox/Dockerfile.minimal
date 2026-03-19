@@ -1,0 +1,39 @@
+# PTC Sandbox Minimal Image
+#
+# A lightweight image with basic data processing capabilities.
+# Smaller than the full datascience image (~200MB vs ~800MB).
+#
+# Build: docker build -t ptc-sandbox:minimal -f Dockerfile.minimal .
+# Usage: Set PTC_SANDBOX_IMAGE=ptc-sandbox:minimal in your .env
+
+FROM python:3.11-slim
+
+LABEL maintainer="Anthropic API Proxy"
+LABEL description="PTC Sandbox minimal with basic packages"
+
+# Install Python packages (minimal set)
+RUN pip install --no-cache-dir \
+    # Core data analysis
+    numpy>=1.24.0 \
+    pandas>=2.0.0 \
+    # HTTP requests
+    requests>=2.31.0 \
+    httpx>=0.24.0 \
+    # JSON handling
+    orjson>=3.9.0 \
+    # Date/time utilities
+    python-dateutil>=2.8.0
+
+# Create non-root user for security
+RUN useradd -m -s /bin/bash sandbox
+
+# Create workspace directory with proper permissions for sandbox user
+RUN mkdir -p /workspace && chown sandbox:sandbox /workspace
+
+# Set working directory
+WORKDIR /workspace
+
+# Switch to non-root user
+USER sandbox
+
+CMD ["python", "--version"]

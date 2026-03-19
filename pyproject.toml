@@ -1,0 +1,202 @@
+[project]
+name = "anthropic-api-proxy"
+version = "1.0.0"
+description = "API proxy service that converts AWS Bedrock API to Anthropic-compatible format"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["anthropic", "bedrock", "aws", "api", "proxy", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+]
+
+dependencies = [
+    # Web Framework
+    "fastapi>=0.119.0",
+    "uvicorn[standard]>=0.37.0",
+    "python-multipart>=0.0.9",
+    # AWS SDK
+    "boto3>=1.42.16",
+    "botocore>=1.42.16",
+    # Anthropic SDK (for reference/testing)
+    "anthropic>=0.69.0",
+    # Data Validation
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # Environment Management
+    "python-dotenv>=1.0.0",
+    # Monitoring & Logging
+    "prometheus-client>=0.20.0",
+    # HTTP Client
+    "httpx>=0.27.0",
+    # OpenAI SDK (for Bedrock OpenAI-compatible endpoint)
+    "openai>=1.60.0",
+    "pytest>=8.4.2",
+    # Docker SDK (for Programmatic Tool Calling)
+    "docker>=7.0.0",
+    # OpenTelemetry (for tracing)
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27.0",
+    # JWT validation (for Admin Portal Cognito auth)
+    "python-jose[cryptography]>=3.3.0",
+    # Web Search (Tavily provider)
+    "tavily-python>=0.5.0",
+    # Encryption (for Provider Key encryption)
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "httpx>=0.27.0",
+    # Property-Based Testing
+    "hypothesis>=6.100.0",
+
+    # AWS Mocking
+    "moto[all]>=5.0.0",
+
+    # Code Quality
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+
+    # Type Stubs
+    "boto3-stubs[bedrock-runtime,dynamodb]>=1.34.0",
+    "types-boto3>=1.0.2",
+]
+
+monitoring = [
+    "sentry-sdk[fastapi]>=1.40.0",
+]
+
+smart-routing = [
+    # RouteLLM for intelligent query complexity classification (lazy-loaded)
+    "routellm>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/anthropic-api-proxy"
+Documentation = "https://github.com/yourusername/anthropic-api-proxy/blob/main/README.md"
+Repository = "https://github.com/yourusername/anthropic-api-proxy"
+Issues = "https://github.com/yourusername/anthropic-api-proxy/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "boto3.*",
+    "botocore.*",
+    "moto.*",
+    "prometheus_client.*",
+    "opentelemetry.*",
+]
+ignore_missing_imports = true

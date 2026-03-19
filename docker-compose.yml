@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  # API Proxy Service
+  api-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anthropic-bedrock-proxy
+    ports:
+      - "8000:8000"
+    environment:
+      # Application
+      - APP_NAME=Anthropic-Bedrock API Proxy
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+
+      # Server
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=4
+
+      # AWS (use host credentials or set explicitly)
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+
+      # DynamoDB (use local if running localstack)
+      - DYNAMODB_ENDPOINT_URL=http://dynamodb-local:8000
+
+      # Authentication
+      - REQUIRE_API_KEY=True
+      - MASTER_API_KEY=${MASTER_API_KEY:-sk-dev-master-key}
+
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=True
+      - RATE_LIMIT_REQUESTS=100
+      - RATE_LIMIT_WINDOW=60
+
+      # Features
+      - ENABLE_TOOL_USE=True
+      - ENABLE_EXTENDED_THINKING=True
+      - ENABLE_DOCUMENT_SUPPORT=True
+
+    depends_on:
+      - dynamodb-local
+
+    networks:
+      - proxy-network
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Local DynamoDB for development
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    ports:
+      - "8001:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+  # DynamoDB Admin UI (optional)
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: dynamodb-admin
+    ports:
+      - "8002:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://dynamodb-local:8000
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+    depends_on:
+      - dynamodb-local
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+  # Prometheus for metrics (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+  # Grafana for visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - proxy-network
+    restart: unless-stopped
+
+networks:
+  proxy-network:
+    driver: bridge
+
+volumes:
+  dynamodb-data:
+  prometheus-data:
+  grafana-data:

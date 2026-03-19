@@ -1,0 +1,1980 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sandbox Runner 代码详解 | 沙箱执行器深度解析</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #fefefe;
+            --bg-secondary: #f8fafc;
+            --bg-tertiary: #f1f5f9;
+            --bg-code: #1e293b;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-indigo: #6366f1;
+            --accent-emerald: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-rose: #f43f5e;
+            --accent-violet: #8b5cf6;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Noto Serif SC', Georgia, serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.8;
+            font-size: 17px;
+            min-height: 100vh;
+        }
+
+        /* Subtle grid pattern */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(circle at 25% 25%, rgba(99, 102, 241, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 75% 75%, rgba(59, 130, 246, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        /* Header */
+        header {
+            position: relative;
+            padding: 5rem 2rem 4rem;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 50%, #faf5ff 100%);
+            border-bottom: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(ellipse at 30% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 100%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        /* Decorative shapes */
+        header::after {
+            content: '';
+            position: absolute;
+            top: -100px;
+            right: -100px;
+            width: 400px;
+            height: 400px;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.05));
+            border-radius: 50%;
+            filter: blur(60px);
+            animation: float 8s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(-20px, 20px); }
+        }
+
+        .header-content {
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--accent-indigo);
+            background: white;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            margin-bottom: 1.5rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .badge::before {
+            content: '📦';
+        }
+
+        h1 {
+            font-family: 'Inter', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 3.5rem);
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-indigo) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            line-height: 1.7;
+        }
+
+        /* Main layout */
+        .container {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            max-width: 1400px;
+            margin: 0 auto;
+            gap: 4rem;
+            padding: 3rem 2rem;
+        }
+
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Table of Contents */
+        .toc {
+            position: sticky;
+            top: 2rem;
+            height: fit-content;
+        }
+
+        @media (max-width: 1024px) {
+            .toc {
+                position: relative;
+                top: 0;
+                background: var(--bg-secondary);
+                padding: 1.5rem;
+                border-radius: 16px;
+                border: 1px solid var(--border-color);
+            }
+        }
+
+        .toc-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            margin-bottom: 1rem;
+            padding-left: 1rem;
+        }
+
+        .toc-list {
+            list-style: none;
+            border-left: 2px solid var(--border-color);
+        }
+
+        .toc-item {
+            padding: 0.5rem 0 0.5rem 1rem;
+            border-left: 2px solid transparent;
+            margin-left: -2px;
+            transition: all 0.2s ease;
+        }
+
+        .toc-item:hover {
+            border-left-color: var(--accent-blue);
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.05), transparent);
+        }
+
+        .toc-item.active {
+            border-left-color: var(--accent-indigo);
+            background: linear-gradient(90deg, rgba(99, 102, 241, 0.08), transparent);
+        }
+
+        .toc-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-family: 'Inter', sans-serif;
+            transition: color 0.2s ease;
+        }
+
+        .toc-item:hover .toc-link,
+        .toc-item.active .toc-link {
+            color: var(--accent-indigo);
+        }
+
+        /* Content */
+        article {
+            max-width: 800px;
+        }
+
+        section {
+            margin-bottom: 4rem;
+            scroll-margin-top: 2rem;
+        }
+
+        h2 {
+            font-family: 'Inter', sans-serif;
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 1.5rem;
+            background: linear-gradient(180deg, var(--accent-indigo), var(--accent-blue));
+            border-radius: 2px;
+        }
+
+        h3 {
+            font-family: 'Inter', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 2rem 0 1rem;
+        }
+
+        p {
+            margin-bottom: 1.25rem;
+            color: var(--text-secondary);
+        }
+
+        strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        /* Architecture Diagram Box */
+        .diagram-box {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            overflow-x: auto;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .diagram-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--accent-indigo);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .diagram-title::before {
+            content: '◆';
+            font-size: 0.6rem;
+        }
+
+        .architecture {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .arch-box {
+            background: white;
+            border: 2px solid var(--accent-blue);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin: 1rem 0;
+            box-shadow: var(--shadow-md);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .arch-box:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .arch-box.host {
+            border-color: var(--accent-emerald);
+        }
+
+        .arch-box-title {
+            color: var(--accent-blue);
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .arch-box.host .arch-box-title {
+            color: var(--accent-emerald);
+        }
+
+        .arch-box-title::before {
+            content: '●';
+            font-size: 0.6rem;
+        }
+
+        .arch-box ul {
+            list-style: none;
+            padding-left: 1rem;
+        }
+
+        .arch-box li {
+            position: relative;
+            padding-left: 1.25rem;
+            margin: 0.4rem 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .arch-box li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        .arch-box.host li::before {
+            color: var(--accent-emerald);
+        }
+
+        .pipe-indicator {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 2rem;
+            margin: 1.5rem 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+        }
+
+        .pipe {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.75rem 1rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .pipe-arrow {
+            color: var(--accent-amber);
+            font-size: 1.2rem;
+            animation: bounce 1.5s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(3px); }
+        }
+
+        .pipe-label {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        /* Code blocks */
+        .code-block {
+            position: relative;
+            margin: 1.5rem 0;
+            border-radius: 16px;
+            overflow: hidden;
+            background: var(--bg-code);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #0f172a;
+            border-bottom: 1px solid #334155;
+        }
+
+        .code-lang {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--accent-violet);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .copy-btn {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #94a3b8;
+            padding: 0.4rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .copy-btn.copied {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+
+        pre {
+            margin: 0;
+            padding: 1.25rem;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.7;
+            color: #e2e8f0;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Inline code */
+        p code, li code {
+            background: var(--bg-tertiary);
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.9em;
+            color: var(--accent-rose);
+            border: 1px solid var(--border-color);
+        }
+
+        /* Syntax highlighting */
+        .keyword { color: #c084fc; }
+        .string { color: #86efac; }
+        .comment { color: #64748b; font-style: italic; }
+        .function { color: #60a5fa; }
+        .number { color: #fbbf24; }
+        .variable { color: #f8fafc; }
+        .decorator { color: #fbbf24; }
+        .builtin { color: #f472b6; }
+
+        /* Tables */
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+            background: white;
+        }
+
+        th {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(99, 102, 241, 0.03);
+        }
+
+        /* Info boxes */
+        .info-box {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(99, 102, 241, 0.05));
+            border-left: 4px solid var(--accent-blue);
+            padding: 1.25rem 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 0 12px 12px 0;
+        }
+
+        .info-box.warning {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.05), rgba(251, 191, 36, 0.05));
+            border-left-color: var(--accent-amber);
+        }
+
+        .info-box strong {
+            color: var(--accent-blue);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .info-box strong::before {
+            content: '💡';
+        }
+
+        .info-box.warning strong {
+            color: var(--accent-amber);
+        }
+
+        .info-box.warning strong::before {
+            content: '⚠️';
+        }
+
+        .info-box p {
+            margin: 0;
+            font-size: 0.95rem;
+        }
+
+        /* Mermaid diagrams */
+        .mermaid-wrapper {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            overflow-x: auto;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+
+        /* Timeline */
+        .timeline {
+            position: relative;
+            margin: 2rem 0;
+            padding-left: 2rem;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, var(--accent-blue), var(--accent-emerald), var(--accent-violet));
+            border-radius: 3px;
+        }
+
+        .timeline-item {
+            position: relative;
+            padding: 1rem 0 1rem 1.5rem;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -2rem;
+            top: 1.25rem;
+            width: 12px;
+            height: 12px;
+            background: var(--accent-blue);
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .timeline-item:nth-child(2)::before {
+            background: var(--accent-emerald);
+        }
+
+        .timeline-item:nth-child(3)::before {
+            background: var(--accent-violet);
+        }
+
+        .timeline-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .timeline-desc {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        /* Security grid */
+        .security-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .security-card {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .security-card:hover {
+            border-color: var(--accent-emerald);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
+        }
+
+        .security-icon {
+            font-size: 2rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .security-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .security-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        /* Flow diagram */
+        .flow-diagram {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            overflow-x: auto;
+        }
+
+        .flow-diagram pre {
+            color: var(--text-secondary);
+            background: transparent;
+            padding: 0;
+            font-size: 0.75rem;
+            line-height: 1.8;
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid var(--border-color);
+            padding: 3rem 2rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            background: var(--bg-secondary);
+        }
+
+        footer a {
+            color: var(--accent-indigo);
+            text-decoration: none;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* Animation on scroll */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.6s ease, transform 0.6s ease;
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Decorative elements */
+        .section-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-blue));
+            color: white;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 700;
+            border-radius: 8px;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <span class="badge">Technical Deep Dive</span>
+            <h1>Sandbox Runner 代码详解</h1>
+            <p class="subtitle">深入解析沙箱代码执行器：在隔离环境中安全执行用户代码，支持通过 IPC 调用外部工具的完整实现</p>
+        </div>
+    </header>
+
+    <div class="container">
+        <aside class="toc">
+            <div class="toc-title">目录导航</div>
+            <ul class="toc-list">
+                <li class="toc-item"><a href="#architecture" class="toc-link">架构概览</a></li>
+                <li class="toc-item"><a href="#ipc-protocol" class="toc-link">IPC 协议标记</a></li>
+                <li class="toc-item"><a href="#tool-call" class="toc-link">工具调用机制</a></li>
+                <li class="toc-item"><a href="#dynamic-tools" class="toc-link">动态创建工具函数</a></li>
+                <li class="toc-item"><a href="#output-capture" class="toc-link">输出捕获</a></li>
+                <li class="toc-item"><a href="#code-execution" class="toc-link">用户代码执行核心</a></li>
+                <li class="toc-item"><a href="#main-entry" class="toc-link">主入口</a></li>
+                <li class="toc-item"><a href="#flow" class="toc-link">完整通信流程</a></li>
+                <li class="toc-item"><a href="#security" class="toc-link">安全考虑</a></li>
+                <li class="toc-item"><a href="#sequence" class="toc-link">流程图解</a></li>
+                <li class="toc-item"><a href="#runner-script" class="toc-link">Runner Script 详解</a></li>
+                <li class="toc-item"><a href="#unbuffered-io" class="toc-link">无缓冲 I/O 机制</a></li>
+                <li class="toc-item"><a href="#parallel-tools" class="toc-link">并行工具调用</a></li>
+                <li class="toc-item"><a href="#execution-modes" class="toc-link">执行模式</a></li>
+            </ul>
+        </aside>
+
+        <article>
+            <section id="architecture" class="fade-in">
+                <h2><span class="section-number">1</span>架构概览</h2>
+                <p>这是一个<strong>沙箱代码执行器</strong>，用于在隔离环境中安全执行用户代码，同时支持通过 IPC（进程间通信）调用外部工具。整个系统采用双进程架构，通过标准输入输出进行消息传递。</p>
+
+                <div class="diagram-box">
+                    <div class="diagram-title">系统架构图</div>
+                    <div class="architecture">
+                        <div class="arch-box host">
+                            <div class="arch-box-title">主进程 (Host)</div>
+                            <ul>
+                                <li>启动沙箱子进程</li>
+                                <li>通过 stdin 发送代码和工具调用结果</li>
+                                <li>通过 stdout/stderr 接收执行结果和工具调用请求</li>
+                            </ul>
+                        </div>
+
+                        <div class="pipe-indicator">
+                            <div class="pipe">
+                                <span class="pipe-arrow">↓</span>
+                                <span class="pipe-label">stdin</span>
+                            </div>
+                            <div class="pipe">
+                                <span class="pipe-arrow">↑</span>
+                                <span class="pipe-label">stdout</span>
+                            </div>
+                            <div class="pipe">
+                                <span class="pipe-arrow">↑</span>
+                                <span class="pipe-label">stderr</span>
+                            </div>
+                        </div>
+
+                        <div class="arch-box">
+                            <div class="arch-box-title">沙箱子进程 (Sandbox)</div>
+                            <ul>
+                                <li>接收并执行用户代码</li>
+                                <li>拦截工具调用，转发给主进程</li>
+                                <li>返回执行结果</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="ipc-protocol" class="fade-in">
+                <h2><span class="section-number">2</span>IPC 协议标记</h2>
+                <p>为了在文本流中准确分隔不同类型的消息，系统定义了一组<strong>消息边界标记</strong>。这些标记确保主进程和沙箱子进程能够正确识别和解析消息。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="variable">IPC_TOOL_CALL_START</span> = <span class="string">"__PTC_TOOL_CALL__"</span>
+<span class="variable">IPC_TOOL_CALL_END</span> = <span class="string">"__PTC_END_CALL__"</span>
+<span class="variable">IPC_TOOL_RESULT_START</span> = <span class="string">"__PTC_TOOL_RESULT__"</span>
+<span class="variable">IPC_TOOL_RESULT_END</span> = <span class="string">"__PTC_END_RESULT__"</span>
+<span class="variable">IPC_CODE_OUTPUT_START</span> = <span class="string">"__PTC_OUTPUT__"</span>
+<span class="variable">IPC_CODE_OUTPUT_END</span> = <span class="string">"__PTC_END_OUTPUT__"</span></code></pre>
+                </div>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>标记</th>
+                                <th>用途</th>
+                                <th>方向</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>TOOL_CALL</code></td>
+                                <td>沙箱请求调用工具</td>
+                                <td>沙箱 → 主进程 (stderr)</td>
+                            </tr>
+                            <tr>
+                                <td><code>TOOL_RESULT</code></td>
+                                <td>主进程返回工具结果</td>
+                                <td>主进程 → 沙箱 (stdin)</td>
+                            </tr>
+                            <tr>
+                                <td><code>CODE_OUTPUT</code></td>
+                                <td>代码执行最终结果</td>
+                                <td>沙箱 → 主进程 (stdout)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="tool-call" class="fade-in">
+                <h2><span class="section-number">3</span>工具调用机制</h2>
+
+                <h3>3.1 发送工具调用请求</h3>
+                <p>当沙箱中的代码需要调用外部工具时，会通过 <code>stderr</code> 发送请求。使用 stderr 而非 stdout 是为了避免与用户代码的 <code>print()</code> 输出混淆。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_send_tool_call</span>(tool_name: <span class="builtin">str</span>, arguments: <span class="builtin">dict</span>) -> <span class="builtin">str</span>:
+    <span class="string">"""发送工具调用请求到主进程"""</span>
+    call_id = <span class="builtin">str</span>(uuid.uuid4())  <span class="comment"># 生成唯一ID用于匹配请求/响应</span>
+    request = {
+        <span class="string">"call_id"</span>: call_id,
+        <span class="string">"tool_name"</span>: tool_name,
+        <span class="string">"arguments"</span>: arguments
+    }
+    <span class="comment"># 发送到 stderr（避免与 print 输出混淆）</span>
+    message = <span class="string">f"{IPC_TOOL_CALL_START}{json.dumps(request)}{IPC_TOOL_CALL_END}"</span>
+    <span class="builtin">print</span>(message, file=sys.stderr, flush=<span class="keyword">True</span>)
+    <span class="keyword">return</span> call_id</code></pre>
+                </div>
+
+                <div class="info-box">
+                    <strong>为什么用 stderr？</strong>
+                    <p>stdout 用于用户代码的 <code>print()</code> 输出，stderr 专门用于系统级 IPC 通信，这样可以完全避免消息混淆。</p>
+                </div>
+
+                <h3>3.2 接收工具调用结果</h3>
+                <p>发送请求后，沙箱会阻塞等待主进程通过 stdin 返回结果。通过 <code>call_id</code> 确保请求和响应的正确匹配。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_receive_tool_result</span>(call_id: <span class="builtin">str</span>, timeout: <span class="builtin">float</span> = <span class="number">30.0</span>) -> Any:
+    <span class="string">"""从主进程接收工具调用结果"""</span>
+    <span class="keyword">while</span> <span class="keyword">True</span>:
+        line = sys.stdin.readline()  <span class="comment"># 阻塞读取</span>
+        <span class="keyword">if not</span> line:
+            <span class="keyword">raise</span> <span class="builtin">RuntimeError</span>(<span class="string">f"EOF while waiting for tool result: {call_id}"</span>)
+
+        line = line.strip()
+        <span class="keyword">if</span> IPC_TOOL_RESULT_START <span class="keyword">in</span> line <span class="keyword">and</span> IPC_TOOL_RESULT_END <span class="keyword">in</span> line:
+            <span class="comment"># 解析消息</span>
+            start = line.find(IPC_TOOL_RESULT_START) + <span class="builtin">len</span>(IPC_TOOL_RESULT_START)
+            end = line.find(IPC_TOOL_RESULT_END)
+            result_json = line[start:end]
+            result = json.loads(result_json)
+
+            <span class="comment"># 检查 call_id 匹配</span>
+            <span class="keyword">if</span> result.get(<span class="string">"call_id"</span>) == call_id:
+                <span class="keyword">if</span> result.get(<span class="string">"error"</span>):
+                    <span class="keyword">raise</span> <span class="builtin">RuntimeError</span>(<span class="string">f"Tool error: {result['error']}"</span>)
+                <span class="keyword">return</span> result.get(<span class="string">"result"</span>)</code></pre>
+                </div>
+            </section>
+
+            <section id="dynamic-tools" class="fade-in">
+                <h2><span class="section-number">4</span>动态创建工具函数</h2>
+                <p>系统根据 <code>TOOLS_INFO</code> 配置动态生成工具函数。每个工具函数都是一个异步函数，使用闭包捕获工具名称，并通过 <code>run_in_executor</code> 将阻塞的 stdin 读取放到线程池中执行。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_create_tool_function</span>(tool_name: <span class="builtin">str</span>):
+    <span class="string">"""创建工具调用函数"""</span>
+    <span class="keyword">async def</span> <span class="function">tool_func</span>(**kwargs) -> Any:
+        <span class="comment"># 1. 发送调用请求</span>
+        call_id = _send_tool_call(tool_name, kwargs)
+
+        <span class="comment"># 2. 在线程池中等待结果（避免阻塞事件循环）</span>
+        loop = asyncio.get_event_loop()
+        result = <span class="keyword">await</span> loop.run_in_executor(
+            <span class="keyword">None</span>,  <span class="comment"># 使用默认线程池</span>
+            <span class="keyword">lambda</span>: _receive_tool_result(call_id)
+        )
+        <span class="keyword">return</span> result
+
+    <span class="keyword">return</span> tool_func
+
+<span class="comment"># 根据 TOOLS_INFO 动态生成所有工具函数</span>
+_tool_functions = {}
+<span class="keyword">for</span> tool_info <span class="keyword">in</span> TOOLS_INFO:
+    tool_name = tool_info[<span class="string">"name"</span>]
+    _tool_functions[tool_name] = _create_tool_function(tool_name)</code></pre>
+                </div>
+
+                <div class="info-box">
+                    <strong>关键设计要点</strong>
+                    <p>使用闭包捕获 <code>tool_name</code>，<code>run_in_executor</code> 将阻塞的 stdin 读取放到线程池，避免阻塞 asyncio 事件循环。这样可以支持并行工具调用（如 <code>asyncio.gather</code>）。</p>
+                </div>
+            </section>
+
+            <section id="output-capture" class="fade-in">
+                <h2><span class="section-number">5</span>输出捕获</h2>
+                <p>为了收集用户代码的所有 <code>print</code> 输出，系统实现了一个模拟 <code>sys.stdout</code> 接口的类，将所有输出收集到内存中。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">class</span> <span class="function">OutputCapture</span>:
+    <span class="string">"""捕获 print 输出"""</span>
+    <span class="keyword">def</span> <span class="function">__init__</span>(self):
+        self.outputs = []
+        self._original_stdout = sys.stdout
+
+    <span class="keyword">def</span> <span class="function">write</span>(self, text):
+        <span class="keyword">if</span> text.strip():  <span class="comment"># 忽略空行</span>
+            self.outputs.append(text)
+
+    <span class="keyword">def</span> <span class="function">flush</span>(self):
+        <span class="keyword">pass</span>
+
+    <span class="keyword">def</span> <span class="function">get_output</span>(self) -> <span class="builtin">str</span>:
+        <span class="keyword">return</span> <span class="string">""</span>.join(self.outputs)</code></pre>
+                </div>
+            </section>
+
+            <section id="code-execution" class="fade-in">
+                <h2><span class="section-number">6</span>用户代码执行核心</h2>
+                <p>这是整个沙箱的核心功能：接收用户代码，准备执行环境，注入工具函数，然后在隔离的命名空间中执行代码。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">async def</span> <span class="function">execute_user_code</span>(code: <span class="builtin">str</span>) -> <span class="builtin">dict</span>:
+    <span class="string">"""执行用户代码"""</span>
+
+    <span class="comment"># 1. 准备执行环境（沙箱 globals）</span>
+    exec_globals = {
+        <span class="string">"__builtins__"</span>: __builtins__,
+        <span class="string">"asyncio"</span>: asyncio,
+        <span class="string">"json"</span>: json,
+    }
+
+    <span class="comment"># 2. 注入工具函数（如 web_search, read_file 等）</span>
+    <span class="keyword">for</span> name, func <span class="keyword">in</span> _tool_functions.items():
+        exec_globals[name] = func
+
+    <span class="comment"># 3. 替换 print 函数，捕获输出</span>
+    output_capture = OutputCapture()
+    exec_globals[<span class="string">"print"</span>] = <span class="keyword">lambda</span> *args, **kwargs: output_capture.write(
+        <span class="string">" "</span>.join(<span class="builtin">str</span>(a) <span class="keyword">for</span> a <span class="keyword">in</span> args) + kwargs.get(<span class="string">"end"</span>, <span class="string">"\n"</span>)
+    )
+
+    <span class="comment"># 4. 包装用户代码为异步函数</span>
+    indented_code = <span class="string">"\n"</span>.join(<span class="string">"    "</span> + line <span class="keyword">for</span> line <span class="keyword">in</span> code.split(<span class="string">"\n"</span>))
+    wrapped_code = <span class="string">f"""
+async def __user_main__():
+{indented_code}
+"""</span>
+
+    <span class="comment"># 5. 执行</span>
+    <span class="keyword">try</span>:
+        <span class="builtin">exec</span>(<span class="builtin">compile</span>(wrapped_code, <span class="string">"&lt;user_code&gt;"</span>, <span class="string">"exec"</span>), exec_globals)
+        <span class="keyword">await</span> exec_globals[<span class="string">"__user_main__"</span>]()
+        <span class="keyword">return</span> {
+            <span class="string">"success"</span>: <span class="keyword">True</span>,
+            <span class="string">"output"</span>: output_capture.get_output(),
+            <span class="string">"error"</span>: <span class="keyword">None</span>
+        }
+    <span class="keyword">except</span> <span class="builtin">Exception</span> <span class="keyword">as</span> e:
+        <span class="keyword">return</span> {
+            <span class="string">"success"</span>: <span class="keyword">False</span>,
+            <span class="string">"output"</span>: output_capture.get_output(),
+            <span class="string">"error"</span>: <span class="builtin">str</span>(e)
+        }</code></pre>
+                </div>
+
+                <h3>代码包装示例</h3>
+                <p>用户编写的代码会被自动包装成异步函数，以便支持 <code>await</code> 调用工具：</p>
+
+                <div class="diagram-box">
+                    <div class="diagram-title">代码转换示例</div>
+                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center;">
+                        <div class="code-block" style="margin: 0;">
+                            <div class="code-header">
+                                <span class="code-lang">用户代码</span>
+                            </div>
+                            <pre style="font-size: 0.8rem;"><code>result = <span class="keyword">await</span> web_search(query=<span class="string">"Python"</span>)
+<span class="builtin">print</span>(result)</code></pre>
+                        </div>
+                        <div style="color: var(--accent-indigo); font-size: 1.5rem; font-weight: bold;">→</div>
+                        <div class="code-block" style="margin: 0;">
+                            <div class="code-header">
+                                <span class="code-lang">包装后</span>
+                            </div>
+                            <pre style="font-size: 0.8rem;"><code><span class="keyword">async def</span> <span class="function">__user_main__</span>():
+    result = <span class="keyword">await</span> web_search(query=<span class="string">"Python"</span>)
+    <span class="builtin">print</span>(result)</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="main-entry" class="fade-in">
+                <h2><span class="section-number">7</span>主入口</h2>
+                <p>主入口函数负责从 stdin 读取用户代码（使用边界标记），执行代码，然后将结果输出到 stdout。</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">main</span>():
+    <span class="comment"># 1. 从 stdin 读取用户代码（带边界标记）</span>
+    code_lines = []
+    reading_code = <span class="keyword">False</span>
+
+    <span class="keyword">for</span> line <span class="keyword">in</span> sys.stdin:
+        line = line.rstrip(<span class="string">"\n"</span>)
+        <span class="keyword">if</span> line == <span class="string">"__CODE_START__"</span>:
+            reading_code = <span class="keyword">True</span>
+            <span class="keyword">continue</span>
+        <span class="keyword">elif</span> line == <span class="string">"__CODE_END__"</span>:
+            <span class="keyword">break</span>
+        <span class="keyword">elif</span> reading_code:
+            code_lines.append(line)
+
+    <span class="comment"># 2. 执行代码</span>
+    code = <span class="string">"\n"</span>.join(code_lines)
+    result = asyncio.run(execute_user_code(code))
+
+    <span class="comment"># 3. 输出结果（带 IPC 标记）</span>
+    <span class="builtin">print</span>(<span class="string">f"{IPC_CODE_OUTPUT_START}{json.dumps(result)}{IPC_CODE_OUTPUT_END}"</span>, flush=<span class="keyword">True</span>)</code></pre>
+                </div>
+            </section>
+
+            <section id="flow" class="fade-in">
+                <h2><span class="section-number">8</span>完整通信流程</h2>
+                <p>下图展示了一次完整的代码执行流程，包括工具调用的请求-响应过程：</p>
+
+                <div class="diagram-box flow-diagram">
+                    <div class="diagram-title">通信时序图</div>
+                    <pre style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.8;">
+<span style="color: var(--accent-emerald); font-weight: 600;">主进程</span>                              <span style="color: var(--accent-blue); font-weight: 600;">沙箱子进程</span>
+   │                                    │
+   │──── <span style="color: var(--accent-amber);">stdin:</span> __CODE_START__ ────────▶│
+   │──── <span style="color: var(--accent-amber);">stdin:</span> result = await ... ────▶│
+   │──── <span style="color: var(--accent-amber);">stdin:</span> __CODE_END__ ──────────▶│
+   │                                    │
+   │                                    │ <span style="color: var(--text-muted);">(执行代码，遇到工具调用)</span>
+   │                                    │
+   │◀── <span style="color: var(--accent-rose);">stderr:</span> {IPC_TOOL_CALL_START}  │
+   │    <span style="color: var(--text-muted);">{"call_id":"xxx",</span>               │
+   │     <span style="color: var(--text-muted);">"tool_name":"web_search",...}</span>  │
+   │    <span style="color: var(--accent-rose);">{IPC_TOOL_CALL_END}</span> ───────────│
+   │                                    │
+   │ <span style="color: var(--text-muted);">(主进程执行真正的工具)</span>              │ <span style="color: var(--text-muted);">(沙箱阻塞等待)</span>
+   │                                    │
+   │──── <span style="color: var(--accent-amber);">stdin:</span> {IPC_TOOL_RESULT_START}▶│
+   │    <span style="color: var(--text-muted);">{"call_id":"xxx",</span>               │
+   │     <span style="color: var(--text-muted);">"result":"..."}</span>                │
+   │    <span style="color: var(--accent-amber);">{IPC_TOOL_RESULT_END}</span> ─────────▶│
+   │                                    │
+   │                                    │ <span style="color: var(--text-muted);">(继续执行)</span>
+   │                                    │
+   │◀── <span style="color: var(--accent-violet);">stdout:</span> {IPC_CODE_OUTPUT_START} │
+   │    <span style="color: var(--text-muted);">{"success":true,</span>                │
+   │     <span style="color: var(--text-muted);">"output":"..."}</span>                │
+   │    <span style="color: var(--accent-violet);">{IPC_CODE_OUTPUT_END}</span> ─────────│
+   │                                    │</pre>
+                </div>
+
+                <div class="timeline">
+                    <div class="timeline-item">
+                        <div class="timeline-title">阶段一：代码传输</div>
+                        <div class="timeline-desc">主进程通过 stdin 将用户代码发送给沙箱，使用 <code>__CODE_START__</code> 和 <code>__CODE_END__</code> 标记边界</div>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-title">阶段二：工具调用</div>
+                        <div class="timeline-desc">沙箱执行代码时遇到工具调用，通过 stderr 发送请求，然后阻塞等待结果</div>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-title">阶段三：结果返回</div>
+                        <div class="timeline-desc">代码执行完毕后，沙箱通过 stdout 返回最终结果（包含输出和错误信息）</div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="security" class="fade-in">
+                <h2><span class="section-number">9</span>安全考虑</h2>
+                <p>沙箱执行器实现了多层安全防护，确保用户代码无法影响主系统：</p>
+
+                <div class="security-grid">
+                    <div class="security-card">
+                        <div class="security-icon">🔒</div>
+                        <div class="security-title">代码隔离</div>
+                        <div class="security-desc">在独立的 Docker 容器中执行，与主进程完全内存隔离</div>
+                    </div>
+                    <div class="security-card">
+                        <div class="security-icon">📝</div>
+                        <div class="security-title">输出隔离</div>
+                        <div class="security-desc">替换 print 函数，捕获并过滤所有输出内容</div>
+                    </div>
+                    <div class="security-card">
+                        <div class="security-icon">🔧</div>
+                        <div class="security-title">工具控制</div>
+                        <div class="security-desc">所有工具调用必须通过 IPC，由主进程审核后执行</div>
+                    </div>
+                    <div class="security-card">
+                        <div class="security-icon">⏱️</div>
+                        <div class="security-title">超时控制</div>
+                        <div class="security-desc">进程级别的执行超时，防止无限循环和资源耗尽</div>
+                    </div>
+                    <div class="security-card">
+                        <div class="security-icon">🌐</div>
+                        <div class="security-title">网络隔离</div>
+                        <div class="security-desc">容器默认禁用网络访问，防止数据泄露</div>
+                    </div>
+                    <div class="security-card">
+                        <div class="security-icon">📦</div>
+                        <div class="security-title">资源限制</div>
+                        <div class="security-desc">限制内存 (256MB) 和 CPU (50%) 使用量</div>
+                    </div>
+                </div>
+
+                <div class="info-box warning">
+                    <strong>安全提示</strong>
+                    <p>这个沙箱并非完全安全（比如没有限制 <code>__builtins__</code>），生产环境需要配合 Docker 安全配置、gVisor 等容器技术实现更强的隔离。</p>
+                </div>
+            </section>
+
+            <section id="sequence" class="fade-in">
+                <h2><span class="section-number">10</span>流程图解</h2>
+                <p>以下是完整的系统交互流程图，展示了从用户请求到最终响应的全过程：</p>
+
+                <div class="mermaid-wrapper">
+                    <pre class="mermaid">
+sequenceDiagram
+    participant User as 用户
+    participant Orch as Orchestrator
+    participant Claude as Bedrock API
+    participant Sandbox as 沙箱执行器
+    participant Container as Docker容器
+    participant Tools as 工具注册表
+
+    rect rgb(240, 248, 255)
+    Note over Tools: ⚙️ 初始化阶段
+    Note over Tools: 客户端注册工具
+    end
+
+    User->>Orch: 发送请求
+    Orch->>Claude: 调用API（附带工具文档）
+    Claude->>Orch: 返回 execute_code 调用
+
+    Orch->>Sandbox: 执行代码
+    Sandbox->>Container: 创建容器并运行代码
+
+    Container->>Sandbox: IPC请求：调用工具
+    Sandbox->>Tools: 执行实际工具函数
+    Tools->>Sandbox: 返回结果
+    Sandbox->>Container: 返回工具结果
+
+    Container->>Sandbox: 代码执行完成
+    Sandbox->>Orch: 返回输出
+
+    Orch->>Claude: 发送执行结果
+    Claude->>Orch: 生成最终回复
+    Orch->>User: 返回答案
+                    </pre>
+                </div>
+
+                <h3>详细流程图</h3>
+                <div class="mermaid-wrapper">
+                    <pre class="mermaid">
+sequenceDiagram
+    participant User as 用户
+    participant Registry as ToolRegistry
+    participant Orch as Orchestrator
+    participant Claude as Bedrock API
+    participant Sandbox as SandboxExecutor
+    participant Container as Docker Container
+    participant Process as 主进程IPC
+
+    rect rgb(240, 248, 255)
+        Note over User,Registry: 1. 初始化阶段
+        User->>Registry: 注册工具函数
+        Registry->>Registry: 存储工具函数
+        Registry->>Registry: 生成 Schema
+    end
+
+    rect rgb(255, 248, 240)
+        Note over User,Claude: 2. 请求处理流程
+        User->>Orch: 发送用户请求
+        Orch->>Orch: 构建 System Prompt
+        Orch->>Claude: 调用 Claude API
+    end
+
+    rect rgb(240, 255, 248)
+        Note over Claude: 3. Claude 决策
+        Claude->>Claude: 分析请求
+        Claude->>Orch: 返回 tool_use
+    end
+
+    rect rgb(248, 240, 255)
+        Note over Orch,Container: 4. 沙箱执行
+        Orch->>Sandbox: execute(code)
+        Sandbox->>Container: 创建 Docker 容器
+        Sandbox->>Container: 注入 runner.py
+        Sandbox->>Container: 发送代码
+        Container->>Container: 执行用户代码
+    end
+
+    rect rgb(255, 250, 240)
+        Note over Container,Process: 5. IPC 工具调用
+        Container->>Process: stderr: 工具调用请求
+        Process->>Registry: 执行工具
+        Registry->>Process: 返回结果
+        Process->>Container: stdin: 工具结果
+        Container->>Container: 继续执行
+    end
+
+    rect rgb(240, 250, 255)
+        Note over Container,Orch: 6. 执行完成
+        Container->>Sandbox: stdout: 执行结果
+        Sandbox->>Orch: 返回结果
+    end
+
+    rect rgb(245, 248, 255)
+        Note over Orch,User: 7. 生成回复
+        Orch->>Claude: 发送 tool_result
+        Claude->>Orch: 返回最终回复
+        Orch->>User: 返回答案
+    end
+                    </pre>
+                </div>
+            </section>
+
+            <section id="runner-script" class="fade-in">
+                <h2><span class="section-number">11</span>Runner Script 详解</h2>
+                <p>Runner Script 是沙箱执行的核心脚本，由主进程动态生成并注入到 Docker 容器中。它负责接收用户代码、拦截工具调用、与主进程通信。</p>
+
+                <h3>11.1 脚本生成机制</h3>
+                <p>Runner Script 是一个<strong>模板</strong>，主进程通过 <code>_get_runner_script()</code> 方法动态生成，将工具定义注入脚本中：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python - sandbox.py</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_get_runner_script</span>(self, tools: <span class="builtin">list</span>[<span class="builtin">dict</span>], loop_mode: <span class="builtin">bool</span> = <span class="keyword">False</span>) -> <span class="builtin">str</span>:
+    <span class="string">"""
+    Generate the runner script for sandbox execution.
+
+    Args:
+        tools: List of tool definitions (name, description, input_schema)
+        loop_mode: Whether to run in loop mode for session reuse
+    """</span>
+    tools_json = json.dumps(tools)
+
+    <span class="keyword">return</span> <span class="string">f'''#!/usr/bin/env python3
+# IPC Protocol markers
+IPC_TOOL_CALL_START = "{IPC_TOOL_CALL_START}"
+...
+# Tool definitions (动态注入)
+TOOLS_INFO = {tools_json}
+# Loop mode configuration
+LOOP_MODE = {str(loop_mode)}
+...
+'''</span></code></pre>
+                </div>
+
+                <h3>11.2 脚本结构总览</h3>
+                <p>完整的 Runner Script 包含以下核心组件：</p>
+
+                <div class="diagram-box">
+                    <div class="diagram-title">Runner Script 组件架构</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                        <div class="arch-box">
+                            <div class="arch-box-title">IPC 协议层</div>
+                            <ul>
+                                <li>协议标记常量</li>
+                                <li>消息编解码</li>
+                                <li>边界检测</li>
+                            </ul>
+                        </div>
+                        <div class="arch-box host">
+                            <div class="arch-box-title">I/O 管理层</div>
+                            <ul>
+                                <li>无缓冲读取</li>
+                                <li>共享缓冲区</li>
+                                <li>线程锁同步</li>
+                            </ul>
+                        </div>
+                        <div class="arch-box">
+                            <div class="arch-box-title">工具调用层</div>
+                            <ul>
+                                <li>动态函数生成</li>
+                                <li>异步执行器</li>
+                                <li>结果协调</li>
+                            </ul>
+                        </div>
+                        <div class="arch-box host">
+                            <div class="arch-box-title">代码执行层</div>
+                            <ul>
+                                <li>代码包装</li>
+                                <li>输出捕获</li>
+                                <li>异常处理</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <h3>11.3 全局状态管理</h3>
+                <p>Runner Script 使用全局变量管理共享状态，支持多线程并发访问：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="comment"># 共享状态 - 用于结果协调（使用无缓冲 I/O）</span>
+<span class="comment"># 这避免了 select() 和 Python 缓冲 readline() 混用的问题</span>
+
+_results = {}           <span class="comment"># call_id -> result 的映射</span>
+_io_lock = threading.Lock()  <span class="comment"># I/O 操作的线程锁</span>
+_stdin_buffer = <span class="string">""</span>      <span class="comment"># 无缓冲 stdin 读取的共享缓冲区</span>
+_stdin_fd = <span class="keyword">None</span>        <span class="comment"># stdin 文件描述符（缓存）</span>
+
+<span class="keyword">def</span> <span class="function">_get_stdin_fd</span>():
+    <span class="string">"""获取 stdin 文件描述符（带缓存）"""</span>
+    <span class="keyword">global</span> _stdin_fd
+    <span class="keyword">if</span> _stdin_fd <span class="keyword">is</span> <span class="keyword">None</span>:
+        _stdin_fd = sys.stdin.fileno()
+    <span class="keyword">return</span> _stdin_fd</code></pre>
+                </div>
+
+                <div class="info-box">
+                    <strong>为什么需要全局状态？</strong>
+                    <p>当用户代码使用 <code>asyncio.gather()</code> 并行调用多个工具时，每个工具调用在不同线程中执行。共享的 <code>_results</code> 字典允许任意线程读取到发往它的结果，而 <code>_io_lock</code> 确保线程安全。</p>
+                </div>
+            </section>
+
+            <section id="unbuffered-io" class="fade-in">
+                <h2><span class="section-number">12</span>无缓冲 I/O 机制</h2>
+                <p>Runner Script 的核心创新是使用<strong>无缓冲 I/O</strong> 替代 Python 默认的缓冲 I/O，这解决了并行工具调用时的竞态条件问题。</p>
+
+                <h3>12.1 问题背景</h3>
+                <p>Python 的 <code>sys.stdin.readline()</code> 使用内部缓冲区，与 <code>select()</code> 配合使用时会导致问题：</p>
+
+                <div class="diagram-box">
+                    <div class="diagram-title">缓冲 I/O 的问题</div>
+                    <pre style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.8;">
+<span style="color: var(--accent-rose); font-weight: 600;">问题场景：并行工具调用</span>
+
+线程 A (get_expenses)          线程 B (get_budget)
+        │                              │
+        ├─ readline() 阻塞 ────────────┤
+        │                              │
+        │  <span style="color: var(--text-muted);">← 主进程发送两个结果 →</span>      │
+        │  result_A + result_B         │
+        │                              │
+        ├─ readline() 读取 ────────────┤
+        │  读到 result_A               │
+        │  <span style="color: var(--accent-rose);">但 result_B 留在缓冲区!</span>    │
+        │                              │
+        │                              ├─ readline() 阻塞
+        │                              │  <span style="color: var(--accent-rose);">永远等不到数据!</span>
+        │                              │  (数据在线程A的缓冲区)</pre>
+                </div>
+
+                <h3>12.2 解决方案：共享缓冲区</h3>
+                <p>使用 <code>os.read()</code> 进行无缓冲读取，所有线程共享同一个应用级缓冲区：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_read_and_buffer_data</span>(timeout: <span class="builtin">float</span> = <span class="number">0.1</span>) -> <span class="builtin">bool</span>:
+    <span class="string">"""从 stdin 读取数据到共享缓冲区（无缓冲 I/O）
+
+    必须持有 _io_lock 才能调用此函数。
+    返回 True 表示读取到数据，False 表示没有数据。
+    """</span>
+    <span class="keyword">global</span> _stdin_buffer
+    stdin_fd = _get_stdin_fd()
+
+    <span class="keyword">try</span>:
+        <span class="comment"># 使用 select 检查是否有数据可读</span>
+        readable, _, _ = select.select([stdin_fd], [], [], timeout)
+        <span class="keyword">if not</span> readable:
+            <span class="keyword">return</span> <span class="keyword">False</span>
+
+        <span class="comment"># 无缓冲读取 - 直接从文件描述符读取</span>
+        chunk = os.read(stdin_fd, <span class="number">65536</span>)  <span class="comment"># 最多读取 64KB</span>
+        <span class="keyword">if not</span> chunk:
+            <span class="keyword">return</span> <span class="keyword">False</span>
+
+        <span class="comment"># 追加到共享缓冲区</span>
+        _stdin_buffer += chunk.decode(<span class="string">"utf-8"</span>)
+        <span class="keyword">return</span> <span class="keyword">True</span>
+    <span class="keyword">except</span> (OSError, ValueError):
+        <span class="keyword">return</span> <span class="keyword">False</span></code></pre>
+                </div>
+
+                <h3>12.3 结果处理流水线</h3>
+                <p>读取数据后，需要解析并分发到对应的等待线程：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_process_tool_results</span>():
+    <span class="string">"""处理缓冲区中的完整工具结果行
+
+    必须持有 _io_lock 才能调用此函数。
+    """</span>
+    <span class="keyword">global</span> _stdin_buffer
+
+    <span class="comment"># 逐行处理缓冲区</span>
+    <span class="keyword">while</span> <span class="string">"\\n"</span> <span class="keyword">in</span> _stdin_buffer:
+        line, remaining = _stdin_buffer.split(<span class="string">"\\n"</span>, <span class="number">1</span>)
+
+        <span class="comment"># 检查是否是工具结果消息</span>
+        <span class="keyword">if</span> IPC_TOOL_RESULT_START <span class="keyword">in</span> line <span class="keyword">and</span> IPC_TOOL_RESULT_END <span class="keyword">in</span> line:
+            <span class="keyword">try</span>:
+                <span class="comment"># 提取 JSON 内容</span>
+                start = line.find(IPC_TOOL_RESULT_START) + <span class="builtin">len</span>(IPC_TOOL_RESULT_START)
+                end = line.find(IPC_TOOL_RESULT_END)
+                result_json = line[start:end]
+                result = json.loads(result_json)
+
+                <span class="comment"># 存储到共享字典，供对应线程获取</span>
+                call_id = result.get(<span class="string">"call_id"</span>)
+                <span class="keyword">if</span> call_id:
+                    _results[call_id] = result  <span class="comment"># 关键：按 call_id 分发</span>
+            <span class="keyword">except</span> Exception:
+                <span class="keyword">pass</span>
+
+            _stdin_buffer = remaining
+        <span class="keyword">else</span>:
+            <span class="comment"># 非工具结果行，停止处理（可能是代码块）</span>
+            <span class="keyword">break</span></code></pre>
+                </div>
+
+                <div class="diagram-box">
+                    <div class="diagram-title">共享缓冲区工作流程</div>
+                    <pre style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.8;">
+<span style="color: var(--accent-emerald); font-weight: 600;">解决方案：共享缓冲区 + 线程锁</span>
+
+          ┌─────────────────────────────────────────┐
+          │           _stdin_buffer (共享)           │
+          │  "result_A\\nresult_B\\n"                 │
+          └─────────────────────────────────────────┘
+                          │
+                    _io_lock 保护
+                          │
+          ┌───────────────┴───────────────┐
+          │                               │
+     线程 A                          线程 B
+          │                               │
+    ┌─────┴─────┐                   ┌─────┴─────┐
+    │ 获取锁     │                   │ 等待锁     │
+    │ 读取数据   │                   │    ...    │
+    │ 处理结果   │                   │    ...    │
+    │ 找到 A     │ ←─ <span style="color: var(--accent-emerald);">result_A</span>     │    ...    │
+    │ B 存入字典 │ ──→ _results["B"]│    ...    │
+    │ 释放锁     │                   │ 获取锁     │
+    └───────────┘                   │ 检查字典   │
+                                    │ 找到 B     │ ←─ <span style="color: var(--accent-blue);">result_B</span>
+                                    │ 释放锁     │
+                                    └───────────┘</pre>
+                </div>
+            </section>
+
+            <section id="parallel-tools" class="fade-in">
+                <h2><span class="section-number">13</span>并行工具调用</h2>
+                <p>Runner Script 的设计允许用户代码使用 <code>asyncio.gather()</code> 并行调用多个工具，大幅提升执行效率。</p>
+
+                <h3>13.1 等待结果的实现</h3>
+                <p>每个工具调用在独立线程中等待结果，通过共享状态实现协调：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_receive_tool_result</span>(call_id: <span class="builtin">str</span>, timeout: <span class="builtin">float</span> = <span class="number">300.0</span>) -> Any:
+    <span class="string">"""等待工具结果（使用无缓冲 I/O 和共享缓冲区）
+
+    此函数是线程安全的，通过以下方式正确处理并行工具调用：
+    1. 使用无缓冲的 os.read() 替代缓冲的 readline()
+    2. 所有线程共享同一个缓冲区
+    3. 结果到达时存储，供其他线程获取
+    """</span>
+    start_time = time.time()
+
+    <span class="keyword">while</span> time.time() - start_time < timeout:
+        <span class="keyword">with</span> _io_lock:
+            <span class="comment"># 1. 检查结果是否已经可用（其他线程可能已处理）</span>
+            <span class="keyword">if</span> call_id <span class="keyword">in</span> _results:
+                result = _results.pop(call_id)
+                <span class="keyword">if</span> result.get(<span class="string">"error"</span>):
+                    <span class="keyword">raise</span> RuntimeError(<span class="string">f"Tool error: {result['error']}"</span>)
+                <span class="keyword">return</span> result.get(<span class="string">"result"</span>)
+
+            <span class="comment"># 2. 尝试读取更多数据并处理</span>
+            _read_and_buffer_data(timeout=<span class="number">0.05</span>)
+            _process_tool_results()
+
+            <span class="comment"># 3. 处理后再次检查</span>
+            <span class="keyword">if</span> call_id <span class="keyword">in</span> _results:
+                result = _results.pop(call_id)
+                <span class="keyword">if</span> result.get(<span class="string">"error"</span>):
+                    <span class="keyword">raise</span> RuntimeError(<span class="string">f"Tool error: {result['error']}"</span>)
+                <span class="keyword">return</span> result.get(<span class="string">"result"</span>)
+
+        <span class="comment"># 4. 锁外短暂休眠，让其他线程有机会执行</span>
+        time.sleep(<span class="number">0.01</span>)
+
+    <span class="keyword">raise</span> TimeoutError(<span class="string">f"Timeout waiting for tool result: {call_id}"</span>)</code></pre>
+                </div>
+
+                <h3>13.2 异步工具函数生成</h3>
+                <p>每个工具函数是一个异步函数，使用 <code>run_in_executor</code> 在线程池中执行阻塞的 I/O 操作：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">_create_tool_function</span>(tool_name: <span class="builtin">str</span>):
+    <span class="string">"""创建异步工具函数（调用外部主进程执行）"""</span>
+    <span class="keyword">async def</span> <span class="function">tool_func</span>(**kwargs) -> Any:
+        <span class="comment"># 1. 发送工具调用请求到主进程（通过 stderr）</span>
+        call_id = _send_tool_call(tool_name, kwargs)
+
+        <span class="comment"># 2. 在线程池中等待结果</span>
+        <span class="comment">#    - 避免阻塞 asyncio 事件循环</span>
+        <span class="comment">#    - 允许其他工具调用并行执行</span>
+        loop = asyncio.get_event_loop()
+        result = <span class="keyword">await</span> loop.run_in_executor(
+            <span class="keyword">None</span>,  <span class="comment"># 使用默认线程池</span>
+            <span class="keyword">lambda</span>: _receive_tool_result(call_id)
+        )
+        <span class="keyword">return</span> result
+
+    <span class="keyword">return</span> tool_func
+
+<span class="comment"># 动态创建所有工具函数</span>
+_tool_functions = {}
+<span class="keyword">for</span> tool_info <span class="keyword">in</span> TOOLS_INFO:
+    tool_name = tool_info[<span class="string">"name"</span>]
+    _tool_functions[tool_name] = _create_tool_function(tool_name)</code></pre>
+                </div>
+
+                <h3>13.3 并行调用示例</h3>
+                <p>用户可以编写这样的代码来并行调用工具：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python - 用户代码示例</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="comment"># 并行获取多个员工的费用数据</span>
+employee_ids = [<span class="string">"ENG001"</span>, <span class="string">"ENG002"</span>, <span class="string">"ENG003"</span>, <span class="string">"ENG004"</span>]
+
+<span class="comment"># 创建并行任务</span>
+expense_tasks = [
+    get_expenses(employee_id=emp_id, quarter=<span class="string">"Q3"</span>)
+    <span class="keyword">for</span> emp_id <span class="keyword">in</span> employee_ids
+]
+
+<span class="comment"># 并行执行所有任务 - 4个请求同时发出!</span>
+results = <span class="keyword">await</span> asyncio.gather(*expense_tasks)
+
+<span class="comment"># 处理结果</span>
+<span class="keyword">for</span> emp_id, result <span class="keyword">in</span> <span class="builtin">zip</span>(employee_ids, results):
+    <span class="builtin">print</span>(<span class="string">f"{emp_id}: {result}"</span>)</code></pre>
+                </div>
+
+                <div class="info-box">
+                    <strong>性能优势</strong>
+                    <p>并行调用 4 个工具的时间约等于最慢那个工具的执行时间，而非 4 个工具执行时间之和。主进程会批量收集这些请求并返回给客户端并行执行。</p>
+                </div>
+            </section>
+
+            <section id="execution-modes" class="fade-in">
+                <h2><span class="section-number">14</span>执行模式</h2>
+                <p>Runner Script 支持两种执行模式：<strong>单次执行模式</strong>和<strong>循环执行模式</strong>，通过 <code>LOOP_MODE</code> 变量控制。</p>
+
+                <h3>14.1 单次执行模式 (Single Mode)</h3>
+                <p>执行一次代码后退出，适用于无状态的简单场景：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">main_single</span>():
+    <span class="string">"""单次执行模式"""</span>
+    <span class="comment"># 1. 读取代码块</span>
+    code = read_code_block()
+
+    <span class="keyword">if</span> code <span class="keyword">is</span> <span class="keyword">None</span> <span class="keyword">or not</span> code:
+        error_result = json.dumps({<span class="string">"success"</span>: <span class="keyword">False</span>, <span class="string">"output"</span>: <span class="string">""</span>, <span class="string">"error"</span>: <span class="string">"No code provided"</span>})
+        <span class="builtin">print</span>(<span class="string">f"{IPC_CODE_OUTPUT_START}{error_result}{IPC_CODE_OUTPUT_END}"</span>, flush=<span class="keyword">True</span>)
+        <span class="keyword">return</span>
+
+    <span class="comment"># 2. 准备执行环境</span>
+    exec_globals = {
+        <span class="string">"__builtins__"</span>: __builtins__,
+        <span class="string">"asyncio"</span>: asyncio,
+        <span class="string">"json"</span>: json,
+    }
+
+    <span class="comment"># 3. 执行代码</span>
+    <span class="keyword">try</span>:
+        result = asyncio.run(execute_user_code(code, exec_globals))
+    <span class="keyword">except</span> Exception <span class="keyword">as</span> e:
+        result = {<span class="string">"success"</span>: <span class="keyword">False</span>, <span class="string">"output"</span>: <span class="string">""</span>, <span class="string">"error"</span>: <span class="builtin">str</span>(e)}
+
+    <span class="comment"># 4. 输出结果并退出</span>
+    <span class="builtin">print</span>(<span class="string">f"{IPC_CODE_OUTPUT_START}{json.dumps(result)}{IPC_CODE_OUTPUT_END}"</span>, flush=<span class="keyword">True</span>)</code></pre>
+                </div>
+
+                <h3>14.2 循环执行模式 (Loop Mode)</h3>
+                <p>容器保持运行，可执行多段代码，支持<strong>会话复用</strong>和<strong>状态保持</strong>：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">main_loop</span>():
+    <span class="string">"""循环执行模式 - 用于会话复用"""</span>
+    <span class="comment"># 1. 准备共享的执行环境（跨执行保持状态）</span>
+    exec_globals = {
+        <span class="string">"__builtins__"</span>: __builtins__,
+        <span class="string">"asyncio"</span>: asyncio,
+        <span class="string">"json"</span>: json,
+    }
+
+    <span class="comment"># 2. 发送就绪信号</span>
+    <span class="builtin">print</span>(<span class="string">f"{READY_SIGNAL}"</span>, file=sys.stderr, flush=<span class="keyword">True</span>)
+
+    <span class="comment"># 3. 进入主循环</span>
+    <span class="keyword">while</span> <span class="keyword">True</span>:
+        code = read_code_block()
+
+        <span class="keyword">if</span> code <span class="keyword">is</span> <span class="keyword">None</span>:  <span class="comment"># 收到退出信号或 EOF</span>
+            <span class="keyword">break</span>
+
+        <span class="keyword">if not</span> code:
+            error_result = json.dumps({<span class="string">"success"</span>: <span class="keyword">False</span>, <span class="string">"output"</span>: <span class="string">""</span>, <span class="string">"error"</span>: <span class="string">"No code provided"</span>})
+            <span class="builtin">print</span>(<span class="string">f"{IPC_CODE_OUTPUT_START}{error_result}{IPC_CODE_OUTPUT_END}"</span>, flush=<span class="keyword">True</span>)
+            <span class="keyword">continue</span>
+
+        <span class="comment"># 执行代码（exec_globals 在多次执行间共享）</span>
+        <span class="keyword">try</span>:
+            result = asyncio.run(execute_user_code(code, exec_globals))
+        <span class="keyword">except</span> Exception <span class="keyword">as</span> e:
+            result = {<span class="string">"success"</span>: <span class="keyword">False</span>, <span class="string">"output"</span>: <span class="string">""</span>, <span class="string">"error"</span>: <span class="builtin">str</span>(e)}
+
+        <span class="builtin">print</span>(<span class="string">f"{IPC_CODE_OUTPUT_START}{json.dumps(result)}{IPC_CODE_OUTPUT_END}"</span>, flush=<span class="keyword">True</span>)</code></pre>
+                </div>
+
+                <h3>14.3 模式对比</h3>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>特性</th>
+                                <th>单次模式</th>
+                                <th>循环模式</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>容器生命周期</td>
+                                <td>执行一次后销毁</td>
+                                <td>保持运行，可复用</td>
+                            </tr>
+                            <tr>
+                                <td>状态保持</td>
+                                <td>无状态</td>
+                                <td>变量跨执行保持</td>
+                            </tr>
+                            <tr>
+                                <td>启动开销</td>
+                                <td>每次执行都有</td>
+                                <td>仅首次启动</td>
+                            </tr>
+                            <tr>
+                                <td>就绪信号</td>
+                                <td>不发送</td>
+                                <td>发送 <code>__READY__</code></td>
+                            </tr>
+                            <tr>
+                                <td>退出方式</td>
+                                <td>执行完自动退出</td>
+                                <td>收到 <code>__EXIT_SESSION__</code> 或超时</td>
+                            </tr>
+                            <tr>
+                                <td>适用场景</td>
+                                <td>简单、一次性任务</td>
+                                <td>多轮对话、复杂工作流</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>14.4 主入口分发</h3>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="keyword">def</span> <span class="function">main</span>():
+    <span class="string">"""主入口 - 根据配置选择执行模式"""</span>
+    <span class="keyword">if</span> LOOP_MODE:
+        main_loop()   <span class="comment"># 循环模式：会话复用</span>
+    <span class="keyword">else</span>:
+        main_single() <span class="comment"># 单次模式：执行即退出</span>
+
+<span class="keyword">if</span> __name__ == <span class="string">"__main__"</span>:
+    main()</code></pre>
+                </div>
+
+                <div class="info-box warning">
+                    <strong>会话超时</strong>
+                    <p>循环模式下，会话默认在 4.5 分钟后超时（与 Anthropic API 一致）。主进程会发送 <code>__EXIT_SESSION__</code> 信号或直接关闭容器来终止会话。</p>
+                </div>
+            </section>
+
+            <section id="template" class="fade-in">
+                <h2><span class="section-number">15</span>模板变量说明</h2>
+                <p>Runner 脚本是一个<strong>模板文件</strong>，在实际使用时，主进程会将 <code>{tools_info}</code> 占位符替换为真正的工具定义：</p>
+
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">Python</span>
+                        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+                    </div>
+                    <pre><code><span class="comment"># 模板中的占位符</span>
+<span class="variable">TOOLS_INFO</span> = {tools_info}
+
+<span class="comment"># 实际运行时会被替换为：</span>
+<span class="variable">TOOLS_INFO</span> = [
+    {<span class="string">"name"</span>: <span class="string">"web_search"</span>, <span class="string">"description"</span>: <span class="string">"搜索网页"</span>},
+    {<span class="string">"name"</span>: <span class="string">"read_file"</span>, <span class="string">"description"</span>: <span class="string">"读取文件"</span>},
+    {<span class="string">"name"</span>: <span class="string">"query_database"</span>, <span class="string">"description"</span>: <span class="string">"查询数据库"</span>}
+]</code></pre>
+                </div>
+            </section>
+        </article>
+    </div>
+
+    <footer>
+        <p>Anthropic API Proxy · Sandbox Runner Documentation</p>
+        <p>Built with <span style="color: var(--accent-rose);">♥</span> for secure code execution</p>
+    </footer>
+
+    <script>
+        // Initialize Mermaid with light theme
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#eef2ff',
+                primaryTextColor: '#0f172a',
+                primaryBorderColor: '#6366f1',
+                lineColor: '#94a3b8',
+                secondaryColor: '#f8fafc',
+                tertiaryColor: '#f1f5f9',
+                noteBkgColor: '#faf5ff',
+                noteTextColor: '#475569',
+                actorBkg: '#f8fafc',
+                actorBorder: '#6366f1',
+                actorTextColor: '#0f172a',
+                actorLineColor: '#94a3b8',
+                signalColor: '#475569',
+                signalTextColor: '#0f172a',
+                sequenceNumberColor: '#fefefe'
+            },
+            sequence: {
+                actorMargin: 50,
+                boxMargin: 10,
+                boxTextMargin: 5,
+                noteMargin: 10,
+                messageMargin: 35,
+                mirrorActors: false,
+                useMaxWidth: true
+            }
+        });
+
+        // Copy code functionality
+        function copyCode(button) {
+            const codeBlock = button.closest('.code-block').querySelector('code');
+            const text = codeBlock.textContent;
+
+            navigator.clipboard.writeText(text).then(() => {
+                button.textContent = '已复制!';
+                button.classList.add('copied');
+
+                setTimeout(() => {
+                    button.textContent = '复制代码';
+                    button.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // Scroll-based TOC highlighting
+        const sections = document.querySelectorAll('section[id]');
+        const tocItems = document.querySelectorAll('.toc-item');
+
+        function highlightToc() {
+            let current = '';
+
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.offsetHeight;
+
+                if (window.scrollY >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            tocItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.querySelector('a').getAttribute('href') === `#${current}`) {
+                    item.classList.add('active');
+                }
+            });
+        }
+
+        window.addEventListener('scroll', highlightToc);
+        highlightToc();
+
+        // Fade in animation on scroll
+        const fadeElements = document.querySelectorAll('.fade-in');
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        });
+
+        fadeElements.forEach(el => observer.observe(el));
+
+        // Add visible class to elements already in view on load
+        window.addEventListener('load', () => {
+            fadeElements.forEach(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.top < window.innerHeight) {
+                    el.classList.add('visible');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

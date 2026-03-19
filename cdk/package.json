@@ -1,0 +1,26 @@
+{
+  "name": "anthropic-proxy-cdk",
+  "version": "1.0.0",
+  "description": "CDK infrastructure for Anthropic-Bedrock API Proxy",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --all --require-approval never",
+    "deploy:dev": "cdk deploy --all --require-approval never -c environment=dev",
+    "deploy:prod": "cdk deploy --all --require-approval never -c environment=prod",
+    "destroy": "cdk destroy --all",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "aws-cdk": "^2.120.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.120.0",
+    "constructs": "^10.3.0",
+    "source-map-support": "^0.5.21"
+  }
+}
