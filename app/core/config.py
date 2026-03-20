@@ -99,6 +99,20 @@ class Settings(BaseSettings):
     rate_limit_window: int = Field(
         default=60, alias="RATE_LIMIT_WINDOW"
     )  # window in seconds
+    master_key_rate_limit: int = Field(
+        default=10000, alias="MASTER_KEY_RATE_LIMIT",
+        description="Rate limit (requests/window) for master API key. 0 = unlimited."
+    )
+
+    # Security Settings
+    admin_dev_mode: bool = Field(
+        default=False, alias="ADMIN_DEV_MODE",
+        description="When True, admin portal allows unauthenticated access. NEVER enable in production."
+    )
+    require_iam_roles: bool = Field(
+        default=False, alias="REQUIRE_IAM_ROLES",
+        description="When True, reject explicit AWS credentials and require IAM task roles."
+    )
 
     # Bedrock Prompt Caching
     prompt_caching_enabled: bool = Field(
@@ -266,6 +280,16 @@ class Settings(BaseSettings):
         default=True,
         alias="PTC_NETWORK_DISABLED",
         description="Disable network access in PTC sandbox"
+    )
+    ptc_pids_limit: int = Field(
+        default=64,
+        alias="PTC_PIDS_LIMIT",
+        description="Max processes in PTC sandbox container (fork bomb protection)"
+    )
+    ptc_read_only_fs: bool = Field(
+        default=True,
+        alias="PTC_READ_ONLY_FS",
+        description="Mount sandbox container filesystem as read-only with tmpfs for writable paths"
     )
 
     # Standalone Code Execution Settings (code-execution-2025-08-25 beta)

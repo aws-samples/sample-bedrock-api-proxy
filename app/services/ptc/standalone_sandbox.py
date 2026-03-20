@@ -515,7 +515,15 @@ if __name__ == "__main__":
             "working_dir": workspace,
             "security_opt": ["no-new-privileges"],
             "cap_drop": ["ALL"],
+            "pids_limit": self.config.pids_limit,
         }
+
+        if self.config.read_only_fs:
+            container_config["read_only"] = True
+            container_config["tmpfs"] = {
+                "/tmp": "size=64m,noexec,nosuid",
+                "/workspace": "size=128m,noexec,nosuid",
+            }
 
         logger.info(f"[Standalone] Creating session: {session_id}")
         container = self.docker_client.containers.create(**container_config)

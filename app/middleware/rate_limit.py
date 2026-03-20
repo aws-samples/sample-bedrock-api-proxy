@@ -134,9 +134,59 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # If no API key info, skip rate limiting (auth will handle it)
             return await call_next(request)
 
-        # Skip rate limiting for master key
+        # Rate limit master key (0 = unlimited for backward compat)
         if api_key_info.get("is_master", False):
-            return await call_next(request)
+            master_limit = settings.master_key_rate_limit
+            if master_limit == 0:
+                return await call_next(request)
+
+            # Create/get dedicated bucket for master key
+            master_bucket_key = "__master_key__"
+            if master_bucket_key not in self.buckets:
+                self.buckets[master_bucket_key] = TokenBucket(
+                    capacity=master_limit,
+                    refill_rate=float(master_limit)
+                    / float(settings.rate_limit_window),
+                )
+
+            bucket = self.buckets[master_bucket_key]
+
+            if not bucket.consume(1):
+                retry_after = int(bucket.get_time_until_available(1)) + 1
+
+                print(
+                    f"[RATE_LIMIT] Rate limit exceeded for master key"
+                )
+                print(f"  - Limit: {master_limit}")
+                print(f"  - Retry after: {retry_after}s")
+
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail={
+                        "type": "rate_limit_error",
+                        "message": f"Rate limit exceeded. Try again in {retry_after} seconds.",
+                    },
+                    headers={
+                        "Retry-After": str(retry_after),
+                        "X-RateLimit-Limit": str(master_limit),
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": str(
+                            int(time.time()) + retry_after
+                        ),
+                    },
+                )
+
+            response = await call_next(request)
+
+            response.headers["X-RateLimit-Limit"] = str(master_limit)
+            response.headers["X-RateLimit-Remaining"] = str(
+                int(bucket.get_available_tokens())
+            )
+            response.headers["X-RateLimit-Reset"] = str(
+                int(time.time() + settings.rate_limit_window)
+            )
+
+            return response
 
         # Get or create token bucket for this API key
         api_key = api_key_info.get("api_key")

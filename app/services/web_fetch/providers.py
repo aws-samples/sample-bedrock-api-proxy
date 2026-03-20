@@ -4,6 +4,11 @@ Fetch provider interface and implementations.
 Supports:
 - HttpxFetchProvider: Direct HTTP fetch using httpx (default, no API key needed)
 - TavilyFetchProvider: Tavily Extract API (requires paid Tavily plan)
+
+Security: SSRF protection with DNS rebinding prevention.
+DNS resolution is pinned at the transport level so that the validated IP
+is the same IP actually connected to, closing the TOCTOU gap between
+hostname validation and the outbound TCP connection.
 """
 import html as html_module
 import ipaddress
@@ -14,6 +19,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
+
+import httpcore
+import httpx
 
 from app.core.config import settings
 
@@ -125,6 +133,167 @@ def _validate_url_ssrf(url: str) -> None:
             )
 
 
+def _resolve_and_validate(hostname: str) -> str:
+    """
+    Resolve hostname to IP addresses, validate ALL resolved IPs against
+    SSRF rules, and return the first valid (public) IP for DNS pinning.
+
+    This ensures the IP we later connect to has been explicitly validated,
+    preventing DNS rebinding attacks where a hostname resolves to a private
+    IP between the validation check and the actual connection.
+
+    Args:
+        hostname: The hostname to resolve.
+
+    Returns:
+        The first resolved public IP address as a string.
+
+    Raises:
+        FetchError: If the hostname cannot be resolved or any resolved IP
+            is private/reserved.
+    """
+    try:
+        addrinfos = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+    except socket.gaierror:
+        raise FetchError("url_not_accessible", f"Cannot resolve hostname: {hostname}")
+
+    if not addrinfos:
+        raise FetchError("url_not_accessible", f"No addresses found for hostname: {hostname}")
+
+    # Validate ALL resolved IPs — if any is private, block the request.
+    # An attacker-controlled DNS server could return both public and private IPs;
+    # we must reject the entire resolution if any IP is suspicious.
+    for addrinfo in addrinfos:
+        ip_str = str(addrinfo[4][0])
+        if _is_private_ip(ip_str):
+            raise FetchError(
+                "ssrf_blocked",
+                f"Access to private/internal IP address is not allowed: {hostname} -> {ip_str}",
+            )
+
+    # Return first validated IP for DNS pinning
+    return str(addrinfos[0][4][0])
+
+
+class _PinnedDNSNetworkBackend(httpcore.AsyncNetworkBackend):
+    """
+    httpcore network backend that pins DNS resolution for a specific hostname
+    to a pre-validated IP address.
+
+    This prevents DNS rebinding attacks by ensuring the TCP connection goes to
+    the exact IP that was validated during the SSRF check, rather than doing a
+    fresh DNS resolution that could return a different (malicious) IP.
+
+    For any hostname not in the pinning map, falls back to normal resolution
+    via the default AnyIO backend.
+    """
+
+    def __init__(self, pinned_hosts: dict[str, str]):
+        """
+        Args:
+            pinned_hosts: Mapping of hostname -> validated IP address.
+        """
+        self._pinned_hosts = pinned_hosts
+        self._default_backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        """Connect to the pinned IP for mapped hosts, or fall back to default."""
+        actual_host = self._pinned_hosts.get(host, host)
+        if actual_host != host:
+            logger.debug(
+                f"[SSRF/DNS-Pin] Connecting to pinned IP {actual_host} "
+                f"for hostname {host}"
+            )
+        return await self._default_backend.connect_tcp(
+            actual_host,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        """Delegate unix socket connections to default backend."""
+        return await self._default_backend.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        """Delegate sleep to default backend."""
+        await self._default_backend.sleep(seconds)
+
+
+def _create_pinned_transport(
+    hostname: str, pinned_ip: str, **kwargs
+) -> httpx.AsyncHTTPTransport:
+    """
+    Create an httpx transport that pins DNS for *hostname* to *pinned_ip*.
+
+    The transport uses a custom httpcore network backend so that when httpcore
+    opens a TCP connection to *hostname*, it connects to *pinned_ip* instead
+    of performing a fresh DNS lookup. TLS SNI and certificate validation still
+    use the original hostname (handled by httpcore's TLS layer), so HTTPS
+    works correctly.
+
+    Args:
+        hostname: The hostname to pin.
+        pinned_ip: The validated IP to connect to.
+        **kwargs: Additional keyword arguments forwarded to AsyncHTTPTransport.
+
+    Returns:
+        An AsyncHTTPTransport with pinned DNS resolution.
+    """
+    backend = _PinnedDNSNetworkBackend({hostname: pinned_ip})
+    transport = httpx.AsyncHTTPTransport(**kwargs)
+    # Replace the connection pool's network backend with our pinned backend.
+    # AsyncConnectionPool stores the backend in _network_backend and passes
+    # it to new connections. We set it directly on the pool.
+    transport._pool._network_backend = backend
+    return transport
+
+
+async def _pre_request_ssrf_check(request: httpx.Request) -> None:
+    """
+    Event hook that re-validates SSRF just before each outbound request.
+
+    This is a defense-in-depth measure that catches DNS rebinding during
+    redirect chains. Even though we pin DNS for the initial request, redirects
+    may target new hostnames that need fresh validation.
+    """
+    hostname = request.url.host
+    if hostname:
+        host_str = hostname.decode() if isinstance(hostname, bytes) else hostname
+        try:
+            addrinfos = socket.getaddrinfo(
+                host_str, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            raise FetchError(
+                "url_not_accessible", f"Cannot resolve hostname: {host_str}"
+            )
+        for addrinfo in addrinfos:
+            ip_str = str(addrinfo[4][0])
+            if _is_private_ip(ip_str):
+                raise FetchError(
+                    "ssrf_blocked",
+                    f"DNS rebinding detected: {host_str} resolved to private IP {ip_str}",
+                )
+
+
 def _validate_url(url: str) -> None:
     """Common URL validation. Raises FetchError on invalid URL."""
     if not url or not url.startswith(("http://", "https://")):
@@ -192,6 +361,10 @@ class HttpxFetchProvider(FetchProvider):
 
     No external API key required. Fetches URL directly and converts
     HTML to text using simple regex-based extraction.
+
+    Security: Each request uses a per-request httpx client with DNS pinned
+    to the pre-validated IP, preventing DNS rebinding TOCTOU attacks.
+    Redirect targets are also validated via event hooks.
     """
 
     # Supported text content types
@@ -199,94 +372,123 @@ class HttpxFetchProvider(FetchProvider):
                    "application/xhtml+xml", "application/json", "text/csv",
                    "text/markdown"}
 
-    def __init__(self):
-        self._client = None
+    _HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; AnthropicProxy/1.0)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
 
-    @property
-    def client(self):
-        """Lazy-initialize httpx async client with SSRF-safe redirect handling."""
-        if self._client is None:
-            import httpx
+    async def _create_client_for_url(self, url: str) -> httpx.AsyncClient:
+        """
+        Create an httpx client with DNS pinned to the pre-validated IP.
 
-            async def _validate_redirect(response: httpx.Response) -> None:
-                """Validate each redirect target against SSRF."""
-                if response.next_request is not None:
-                    redirect_url = str(response.next_request.url)
-                    try:
-                        _validate_url_ssrf(redirect_url)
-                    except FetchError:
-                        raise FetchError(
-                            "ssrf_blocked",
-                            f"Redirect to blocked URL: {redirect_url}",
-                        )
+        The client pins the initial hostname's DNS resolution so the TCP
+        connection goes to the exact IP validated during SSRF checks.
+        Redirect targets are validated via both request and response hooks.
+        """
+        parsed = urlparse(url)
+        hostname = parsed.hostname
 
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                follow_redirects=True,
-                event_hooks={"response": [_validate_redirect]},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; AnthropicProxy/1.0)",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-            )
-        return self._client
+        if not hostname:
+            raise FetchError("invalid_input", f"Cannot extract hostname from URL: {url}")
+
+        # Resolve hostname and validate ALL IPs; get pinned IP
+        pinned_ip = _resolve_and_validate(hostname)
+        logger.debug(
+            f"[WebFetch/Httpx] DNS pinned: {hostname} -> {pinned_ip}"
+        )
+
+        # Build transport with pinned DNS for the target hostname
+        transport = _create_pinned_transport(hostname, pinned_ip)
+
+        async def _validate_redirect(response: httpx.Response) -> None:
+            """Validate each redirect target against SSRF."""
+            if response.next_request is not None:
+                redirect_url = str(response.next_request.url)
+                try:
+                    _validate_url_ssrf(redirect_url)
+                except FetchError:
+                    raise FetchError(
+                        "ssrf_blocked",
+                        f"Redirect to blocked URL: {redirect_url}",
+                    )
+
+        client = httpx.AsyncClient(
+            transport=transport,
+            timeout=30.0,
+            follow_redirects=True,
+            event_hooks={
+                "request": [_pre_request_ssrf_check],
+                "response": [_validate_redirect],
+            },
+            headers=self._HEADERS,
+        )
+        return client
 
     async def fetch(
         self,
         url: str,
         max_content_tokens: Optional[int] = None,
     ) -> FetchResult:
-        """Fetch content via direct HTTP request."""
+        """Fetch content via direct HTTP request with DNS-pinned transport."""
         _validate_url(url)
 
         logger.info(f"[WebFetch/Httpx] Fetching: {url}")
 
+        # Create a per-request client with DNS pinned to the validated IP.
+        # This is intentionally not a long-lived client — each fetch gets
+        # its own client so that DNS is pinned fresh for each URL.
+        client = await self._create_client_for_url(url)
         try:
-            response = await self.client.get(url)
-            response.raise_for_status()
-        except Exception as e:
-            error_str = str(e).lower()
-            if "429" in error_str or "rate limit" in error_str:
-                raise FetchError("too_many_requests", str(e))
-            raise FetchError("url_not_accessible", str(e))
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+            except FetchError:
+                raise  # re-raise SSRF/validation errors as-is
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate limit" in error_str:
+                    raise FetchError("too_many_requests", str(e))
+                raise FetchError("url_not_accessible", str(e))
 
-        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-        is_pdf = content_type == "application/pdf" or url.lower().endswith(".pdf")
+            content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            is_pdf = content_type == "application/pdf" or url.lower().endswith(".pdf")
 
-        if is_pdf:
-            # Return raw bytes as base64 for PDFs — Claude can handle PDF natively
-            import base64
-            content = base64.b64encode(response.content).decode("utf-8")
-            title = url.rsplit("/", 1)[-1] if "/" in url else url
-            media_type = "application/pdf"
-        elif content_type in self._TEXT_TYPES or content_type.startswith("text/"):
-            raw_html = response.text
-            title = _extract_title(raw_html) if "html" in content_type else ""
-            if "html" in content_type or "xml" in content_type:
-                content = _html_to_text(raw_html)
+            if is_pdf:
+                # Return raw bytes as base64 for PDFs — Claude can handle PDF natively
+                import base64
+                content = base64.b64encode(response.content).decode("utf-8")
+                title = url.rsplit("/", 1)[-1] if "/" in url else url
+                media_type = "application/pdf"
+            elif content_type in self._TEXT_TYPES or content_type.startswith("text/"):
+                raw_html = response.text
+                title = _extract_title(raw_html) if "html" in content_type else ""
+                if "html" in content_type or "xml" in content_type:
+                    content = _html_to_text(raw_html)
+                else:
+                    content = raw_html  # plain text, json, csv — pass through
+                media_type = "text/plain"
             else:
-                content = raw_html  # plain text, json, csv — pass through
-            media_type = "text/plain"
-        else:
-            raise FetchError(
-                "unsupported_content_type",
-                f"Content type not supported: {content_type}"
+                raise FetchError(
+                    "unsupported_content_type",
+                    f"Content type not supported: {content_type}"
+                )
+
+            content = _apply_token_limit(content, max_content_tokens, "WebFetch/Httpx")
+
+            logger.info(
+                f"[WebFetch/Httpx] Fetched {len(content)} chars, "
+                f"title={title!r}, content_type={content_type}"
             )
 
-        content = _apply_token_limit(content, max_content_tokens, "WebFetch/Httpx")
-
-        logger.info(
-            f"[WebFetch/Httpx] Fetched {len(content)} chars, "
-            f"title={title!r}, content_type={content_type}"
-        )
-
-        return FetchResult(
-            url=str(response.url),  # use final URL after redirects
-            title=title,
-            content=content,
-            media_type=media_type,
-            is_pdf=is_pdf,
-        )
+            return FetchResult(
+                url=str(response.url),  # use final URL after redirects
+                title=title,
+                content=content,
+                media_type=media_type,
+                is_pdf=is_pdf,
+            )
+        finally:
+            await client.aclose()
 
 
 class TavilyFetchProvider(FetchProvider):

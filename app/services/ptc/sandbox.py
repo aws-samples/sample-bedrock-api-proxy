@@ -77,6 +77,8 @@ class SandboxConfig:
     cleanup_interval_seconds: float = 60.0
     # Batch window for collecting parallel tool calls (e.g., from asyncio.gather)
     tool_call_batch_window_ms: float = 100.0  # 100ms to collect parallel calls
+    pids_limit: int = 64  # Fork bomb protection
+    read_only_fs: bool = True  # Read-only filesystem with tmpfs for writable paths
 
 
 @dataclass
@@ -136,6 +138,8 @@ class SandboxSession:
     tool_definitions: list[dict] = field(default_factory=list)
     # Runner script version for compatibility checking
     runner_version: int = 0
+    # SHA-256 hash of the owning API key (for session ownership verification)
+    owner_key_hash: str = ""
 
     def is_expired(self) -> bool:
         """Check if session has expired."""
@@ -620,7 +624,7 @@ if __name__ == "__main__":
 
     # ==================== Session Management ====================
 
-    async def create_session(self, tools: list[dict]) -> SandboxSession:
+    async def create_session(self, tools: list[dict], owner_key_hash: str = "") -> SandboxSession:
         """Create a new sandbox session with container."""
         session_id = f"container_{uuid.uuid4().hex[:12]}"
         now = datetime.now()
@@ -643,9 +647,9 @@ if __name__ == "__main__":
         # scenarios (e.g., ECS EC2 with Docker socket mount). Bind mounts resolve
         # paths from the Docker daemon's perspective (the host), not from inside
         # the container that's creating the sandbox.
-        # NOTE: read_only is not used because put_archive requires writable filesystem
-        # before container starts. Security is maintained via network_disabled,
-        # no-new-privileges, and cap_drop=ALL.
+        # NOTE: read_only is supported via tmpfs mounts for writable paths (/tmp, /workspace).
+        # put_archive copies runner script to /tmp BEFORE container starts; Docker applies
+        # read_only at start time, so put_archive to a created-but-not-started container works.
         container_config = {
             "image": image,
             "command": ["python", "-u", "/tmp/runner.py"],
@@ -658,7 +662,15 @@ if __name__ == "__main__":
             "working_dir": self.config.working_dir,
             "security_opt": ["no-new-privileges"],
             "cap_drop": ["ALL"],
+            "pids_limit": self.config.pids_limit,
         }
+
+        if self.config.read_only_fs:
+            container_config["read_only"] = True
+            container_config["tmpfs"] = {
+                "/tmp": "size=64m,noexec,nosuid",
+                "/workspace": "size=128m,noexec,nosuid",
+            }
 
         logger.info(f"Creating sandbox session: {session_id}")
         container = self.docker_client.containers.create(**container_config)
@@ -697,7 +709,8 @@ if __name__ == "__main__":
                 execution_count=0,
                 is_busy=False,
                 tool_definitions=tools,
-                runner_version=RUNNER_SCRIPT_VERSION
+                runner_version=RUNNER_SCRIPT_VERSION,
+                owner_key_hash=owner_key_hash,
             )
 
             with self._sessions_lock:
@@ -752,6 +765,14 @@ if __name__ == "__main__":
                 else:
                     return session
             return None
+
+    @staticmethod
+    def verify_session_ownership(session: SandboxSession, key_hash: str) -> bool:
+        """Verify that the requesting key owns this session."""
+        import hmac
+        if not session.owner_key_hash:
+            return True  # Legacy sessions without ownership info
+        return hmac.compare_digest(session.owner_key_hash, key_hash)
 
     async def close_session(self, session_id: str) -> bool:
         """Close and cleanup a session."""

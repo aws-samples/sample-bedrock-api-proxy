@@ -100,6 +100,10 @@ export interface EnvironmentConfig {
   adminPortalContainerPort: number; // Container port (8005)
   adminPortalHealthCheckPath: string; // Health check path
 
+  // HTTPS/TLS Configuration
+  certificateArn?: string;
+  enableHttpsRedirect: boolean;
+
   // DynamoDB Configuration
   dynamodbBillingMode: 'PAY_PER_REQUEST' | 'PROVISIONED';
   dynamodbReadCapacity?: number;
@@ -202,6 +206,9 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     adminPortalContainerPort: 8005,
     adminPortalHealthCheckPath: '/health',
 
+    // HTTPS/TLS
+    enableHttpsRedirect: false,
+
     // DynamoDB
     dynamodbBillingMode: 'PAY_PER_REQUEST',
 
@@ -301,6 +308,9 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     adminPortalMaxCapacity: 4,
     adminPortalContainerPort: 8005,
     adminPortalHealthCheckPath: '/health',
+
+    // HTTPS/TLS
+    enableHttpsRedirect: true,
 
     // DynamoDB
     dynamodbBillingMode: 'PAY_PER_REQUEST',
@@ -420,5 +430,6 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ...(process.env.WEB_FETCH_DEFAULT_MAX_USES && { webFetchDefaultMaxUses: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_USES) }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS && { webFetchDefaultMaxContentTokens: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS) }),
     ...(process.env.DEFAULT_CACHE_TTL && { defaultCacheTtl: process.env.DEFAULT_CACHE_TTL }),
+    ...(process.env.CERTIFICATE_ARN && { certificateArn: process.env.CERTIFICATE_ARN }),
   };
 }

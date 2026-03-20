@@ -1,6 +1,8 @@
 """
 Master Key Authentication Middleware for Admin Portal.
 """
+import hmac
+import os
 import sys
 from pathlib import Path
 from typing import Callable
@@ -42,8 +44,22 @@ class MasterKeyAuthMiddleware(BaseHTTPMiddleware):
 
         # Validate master key
         if not settings.master_api_key:
-            # No master key configured - allow access (development mode)
-            return await call_next(request)
+            dev_mode = os.getenv("ADMIN_DEV_MODE", "false").lower() in ("true", "1", "yes")
+            if dev_mode:
+                # Explicit dev mode - allow access without master key
+                return await call_next(request)
+            else:
+                # Master key not configured and dev mode not enabled - reject
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={
+                        "error": "auth_not_configured",
+                        "message": (
+                            "MASTER_API_KEY is not configured. "
+                            "Set MASTER_API_KEY, or set ADMIN_DEV_MODE=true for development."
+                        ),
+                    },
+                )
 
         if not admin_key:
             return JSONResponse(
@@ -54,7 +70,7 @@ class MasterKeyAuthMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        if admin_key != settings.master_api_key:
+        if not hmac.compare_digest(admin_key, settings.master_api_key):
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={

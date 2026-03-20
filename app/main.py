@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from app.api import health, messages, models
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.security_validator import validate_security_config
 from app.db.dynamodb import DynamoDBClient
 from app.middleware.auth import AuthMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -75,6 +76,11 @@ async def lifespan(app: FastAPI):
     print(f"Starting {settings.app_name} v{settings.app_version}")
     print(f"Environment: {settings.environment}")
     print(f"AWS Region: {settings.aws_region}")
+
+    # Run startup security validation (warns only, does not block)
+    security_warnings = validate_security_config()
+    if security_warnings:
+        print(f"[SECURITY] Validation: {len(security_warnings)} warning(s) - check logs for details")
 
     # Store DynamoDB client in app state
     app.state.dynamodb_client = dynamodb_client

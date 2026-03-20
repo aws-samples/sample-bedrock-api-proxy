@@ -4,6 +4,7 @@ Messages API endpoints (Anthropic-compatible).
 Implements POST /v1/messages for both streaming and non-streaming message creation.
 Supports Programmatic Tool Calling (PTC) via Docker sandbox execution.
 """
+import hashlib
 import json
 import logging
 from typing import Optional
@@ -296,6 +297,10 @@ async def create_message(
     # Get container ID from request body for session reuse (plain string)
     container_id = request_data.container
 
+    # Compute owner key hash for PTC session ownership verification
+    api_key_str = api_key_info.get("api_key", "") if api_key_info else ""
+    owner_key_hash = hashlib.sha256(api_key_str.encode()).hexdigest() if api_key_str else ""
+
     logger.info(f"Request {request_id}: model={request_data.model}, stream={request_data.stream}, beta={anthropic_beta}")
 
     print(f"\n{'='*80}")
@@ -470,6 +475,7 @@ async def create_message(
                                 service_tier=service_tier,
                                 container_id=container_id,
                                 anthropic_beta=anthropic_beta,
+                                owner_key_hash=owner_key_hash,
                             ),
                             media_type="text/event-stream",
                             headers={
@@ -509,6 +515,7 @@ async def create_message(
                         service_tier=service_tier,
                         container_id=container_id,
                         anthropic_beta=anthropic_beta,
+                        owner_key_hash=owner_key_hash,
                     )
 
                 # Record usage
@@ -540,6 +547,15 @@ async def create_message(
                     detail={
                         "type": "api_error",
                         "message": "Code execution service is temporarily unavailable",
+                    },
+                )
+            except PermissionError as e:
+                logger.warning(f"Request {request_id}: PTC session ownership denied: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "type": "permission_error",
+                        "message": str(e),
                     },
                 )
             except SandboxError as e:

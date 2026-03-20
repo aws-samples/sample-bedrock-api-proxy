@@ -306,6 +306,8 @@ class PTCService:
                 timeout_seconds=settings.ptc_execution_timeout,
                 network_disabled=settings.ptc_network_disabled,
                 session_timeout_seconds=settings.ptc_session_timeout,
+                pids_limit=settings.ptc_pids_limit,
+                read_only_fs=settings.ptc_read_only_fs,
             )
             self._sandbox_executor = PTCSandboxExecutor(config)
             self._sandbox_executor.start_cleanup_task()
@@ -785,6 +787,7 @@ Before writing code, verify:
         service_tier: str,
         container_id: Optional[str] = None,
         anthropic_beta: Optional[str] = None,
+        owner_key_hash: str = "",
     ) -> Tuple[MessageResponse, Optional[ContainerInfo]]:
         """
         Handle a PTC request.
@@ -840,8 +843,8 @@ Before writing code, verify:
         # Prepare request for Bedrock
         bedrock_request = self.prepare_bedrock_request(request, ptc_callable_tools)
 
-        # Get or create sandbox session
-        session = await self._get_or_create_session(container_id, ptc_callable_tools)
+        # Get or create sandbox session (with ownership verification)
+        session = await self._get_or_create_session(container_id, ptc_callable_tools, owner_key_hash=owner_key_hash)
 
         try:
             # Call Bedrock (with beta header)
@@ -893,13 +896,22 @@ Before writing code, verify:
     async def _get_or_create_session(
         self,
         container_id: Optional[str],
-        tools: List[dict]
+        tools: List[dict],
+        owner_key_hash: str = "",
     ) -> SandboxSession:
-        """Get existing session or create new one."""
+        """Get existing session or create new one, with ownership verification."""
         session = None
 
         if container_id:
             session = self.sandbox_executor.get_session(container_id)
+            if session and not self.sandbox_executor.verify_session_ownership(session, owner_key_hash):
+                logger.warning(
+                    f"Session ownership mismatch for {container_id}. "
+                    f"Expected owner hash prefix: {owner_key_hash[:8]}..."
+                )
+                raise PermissionError(
+                    "You do not have permission to use this container session."
+                )
 
         if session is None:
             # Create new session with tool definitions
@@ -911,7 +923,7 @@ Before writing code, verify:
                 }
                 for t in tools
             ]
-            session = await self.sandbox_executor.create_session(tool_defs)
+            session = await self.sandbox_executor.create_session(tool_defs, owner_key_hash=owner_key_hash)
 
         return session
 
@@ -2379,6 +2391,7 @@ Before writing code, verify:
         service_tier: str,
         container_id: Optional[str] = None,
         anthropic_beta: Optional[str] = None,
+        owner_key_hash: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         Handle PTC request with hybrid streaming.
@@ -2415,8 +2428,8 @@ Before writing code, verify:
         bedrock_request = self.prepare_bedrock_request(request, ptc_callable_tools)
 
         try:
-            # Get or create sandbox session
-            session = await self._get_or_create_session(container_id, ptc_callable_tools)
+            # Get or create sandbox session (with ownership verification)
+            session = await self._get_or_create_session(container_id, ptc_callable_tools, owner_key_hash=owner_key_hash)
             logger.info(f"[PTC Streaming] Using session {session.session_id}")
 
             # Call Bedrock (non-streaming)

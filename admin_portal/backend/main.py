@@ -51,9 +51,31 @@ SERVE_STATIC = os.environ.get("SERVE_STATIC_FILES", "true").lower() == "true"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
+    logger = logging.getLogger(__name__)
+
     print(f"Admin Portal starting on port {ADMIN_PORT}...")
     print(f"Frontend directory: {FRONTEND_DIR}")
     print(f"Serve static files: {SERVE_STATIC}")
+
+    # Startup security validation
+    admin_dev_mode = os.getenv("ADMIN_DEV_MODE", "false").lower() in ("true", "1", "yes")
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    cognito_configured = bool(os.getenv("COGNITO_USER_POOL_ID")) and bool(os.getenv("COGNITO_CLIENT_ID"))
+
+    if admin_dev_mode and environment == "production":
+        logger.critical(
+            "ADMIN_DEV_MODE is enabled in a PRODUCTION environment! "
+            "This bypasses all admin authentication. "
+            "Disable ADMIN_DEV_MODE immediately in production deployments."
+        )
+
+    if not cognito_configured and not admin_dev_mode:
+        logger.warning(
+            "Cognito is not configured and ADMIN_DEV_MODE is not enabled. "
+            "Admin portal authentication endpoints will return 503. "
+            "Configure COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID, "
+            "or set ADMIN_DEV_MODE=true for development."
+        )
 
     # Start usage aggregator background task
     start_aggregator(interval_seconds=USAGE_AGGREGATION_INTERVAL)

@@ -7,6 +7,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import { EnvironmentConfig } from '../config/config';
@@ -99,12 +100,44 @@ export class ECSStack extends cdk.Stack {
       stickinessCookieDuration: cdk.Duration.seconds(300), // 5 minutes - matches PTC session timeout
     });
 
-    // Create HTTP Listener
-    this.listener = this.alb.addListener('HTTPListener', {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultTargetGroups: [targetGroup],
-    });
+    // Create Listener (HTTPS if certificate provided, otherwise HTTP)
+    if (config.certificateArn) {
+      const certificate = acm.Certificate.fromCertificateArn(
+        this, 'Certificate', config.certificateArn
+      );
+      this.listener = this.alb.addListener('HTTPSListener', {
+        port: 443,
+        protocol: elbv2.ApplicationProtocol.HTTPS,
+        certificates: [certificate],
+        defaultTargetGroups: [targetGroup],
+      });
+
+      if (config.enableHttpsRedirect) {
+        this.alb.addListener('HTTPRedirectListener', {
+          port: 80,
+          protocol: elbv2.ApplicationProtocol.HTTP,
+          defaultAction: elbv2.ListenerAction.redirect({
+            protocol: 'HTTPS',
+            port: '443',
+            permanent: true,
+          }),
+        });
+      }
+    } else {
+      // Fallback: HTTP-only listener (development)
+      this.listener = this.alb.addListener('HTTPListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultTargetGroups: [targetGroup],
+      });
+
+      if (config.enableHttpsRedirect) {
+        console.warn(
+          'WARNING: enableHttpsRedirect is true but no certificateArn provided. '
+          + 'HTTPS redirect will not be configured.'
+        );
+      }
+    }
 
     // Create CloudWatch Log Group
     const logGroup = new logs.LogGroup(this, 'LogGroup', {
@@ -535,7 +568,7 @@ export class ECSStack extends cdk.Stack {
       `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
       'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
       // Ensure Docker socket has correct permissions for PTC
-      'chmod 666 /var/run/docker.sock',
+      'chmod 660 /var/run/docker.sock',
     );
 
     // Create Auto Scaling Group

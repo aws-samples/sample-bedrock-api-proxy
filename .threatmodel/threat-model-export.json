@@ -1,0 +1,510 @@
+{
+  "schema": 1,
+  "applicationInfo": {
+    "name": "Threat Model Export",
+    "description": "Anthropic-Bedrock API Proxy — a FastAPI-based translation layer that enables clients using the Anthropic Python SDK to seamlessly access AWS Bedrock models. The service performs bidirectional format conversion between Anthropic's Messages API and AWS Bedrock's Converse/InvokeModel APIs. It includes an admin portal for API key management, usage tracking, pricing, model mapping, routing, and failover configuration. The system supports advanced features including Programmatic Tool Calling (PTC) via Docker sandbox execution, web search/fetch proxy-side tools, multi-provider gateway with smart routing, and OpenAI-compatible API mode. It handles sensitive data including API keys, provider credentials, user prompts/responses, and usage/billing data."
+  },
+  "architecture": {
+    "description": ""
+  },
+  "dataflow": {
+    "description": ""
+  },
+  "assumptions": [
+    {
+      "id": "A001",
+      "numericId": 1,
+      "content": "API key authentication is the primary auth mechanism for the proxy API. Master API key provides admin-level access with no rate limiting.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "A002",
+      "numericId": 2,
+      "content": "The ALB is internet-facing and accepts HTTP/HTTPS traffic from any IP address. No WAF or IP allowlisting is configured by default.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "A003",
+      "numericId": 3,
+      "content": "AWS credentials (access key, secret key, session token) may be passed via environment variables or IAM task roles depending on deployment mode.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "A004",
+      "numericId": 4,
+      "content": "The admin portal falls back to development mode (no authentication) when Cognito is not configured, granting full admin access.",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "A005",
+      "numericId": 5,
+      "content": "PTC Docker sandbox containers are created on the same EC2 host via Docker socket mount, with network disabled by default and memory limits enforced.",
+      "displayOrder": 5,
+      "metadata": []
+    }
+  ],
+  "mitigations": [
+    {
+      "id": "3ef7f372-7f6e-43b5-b281-6fe6a46a43a5",
+      "numericId": 1,
+      "status": "mitigationIdentified",
+      "content": "Enforce HTTPS/TLS termination at ALB and enable TLS between ALB and ECS tasks. Configure ALB to redirect HTTP to HTTPS. Use ACM certificates.",
+      "displayOrder": 1,
+      "metadata": []
+    },
+    {
+      "id": "223ff558-47ec-4607-b31b-15d31a5ab59c",
+      "numericId": 2,
+      "status": "mitigationIdentified",
+      "content": "Implement API key rotation policy, add key expiration dates, and support key revocation. Add anomaly detection for unusual usage patterns per key.",
+      "displayOrder": 2,
+      "metadata": []
+    },
+    {
+      "id": "e69a12b8-ffe6-4692-9320-1041a81fdfb1",
+      "numericId": 3,
+      "status": "mitigationInProgress",
+      "content": "Store master API key exclusively in AWS Secrets Manager with automatic rotation. Restrict access via IAM policies. Never pass as plain environment variable.",
+      "displayOrder": 3,
+      "metadata": []
+    },
+    {
+      "id": "eec7aeee-eb4d-4fc2-b5a6-9ced9fea565f",
+      "numericId": 4,
+      "status": "mitigationIdentified",
+      "content": "Run PTC sandbox containers with --no-new-privileges, drop all capabilities, use read-only root filesystem, and avoid mounting Docker socket directly. Use a container orchestration sidecar or gVisor/Firecracker for stronger isolation.",
+      "displayOrder": 4,
+      "metadata": []
+    },
+    {
+      "id": "971cbfb8-0b71-4676-a221-5150468f7975",
+      "numericId": 5,
+      "status": "mitigationIdentified",
+      "content": "Deploy AWS WAF with rate-based rules, AWS Shield for DDoS protection, and implement IP-based throttling at ALB level. Configure auto-scaling policies for ECS tasks.",
+      "displayOrder": 5,
+      "metadata": []
+    },
+    {
+      "id": "336e2309-cdaa-4150-bfdb-f0506016feba",
+      "numericId": 6,
+      "status": "mitigationInProgress",
+      "content": "Implement structured logging with PII/prompt redaction. Mask API keys in all log output (already partially implemented). Disable debug logging in production. Use log levels appropriately.",
+      "displayOrder": 6,
+      "metadata": []
+    },
+    {
+      "id": "7344f72c-62c7-4c8c-b651-022eb3b76848",
+      "numericId": 7,
+      "status": "mitigationIdentified",
+      "content": "Store Fernet encryption secret in AWS Secrets Manager instead of environment variables. Use AWS KMS for key wrapping. Implement secret rotation and access auditing via CloudTrail.",
+      "displayOrder": 7,
+      "metadata": []
+    },
+    {
+      "id": "707edb04-2e83-4b0f-b4b6-c59ca8672d66",
+      "numericId": 8,
+      "status": "mitigationIdentified",
+      "content": "Remove development mode fallback from CognitoAuthMiddleware. Require Cognito configuration for all deployments. Add startup validation that fails if COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID are not set.",
+      "displayOrder": 8,
+      "metadata": []
+    },
+    {
+      "id": "c9fc1f6f-2528-41b5-b58e-493111c4a63c",
+      "numericId": 9,
+      "status": "mitigationIdentified",
+      "content": "Implement URL allowlist/blocklist for web fetch tool. Block requests to RFC 1918 private IP ranges, link-local addresses (169.254.x.x), and AWS metadata endpoint (169.254.169.254). Use IMDSv2 with hop limit of 1.",
+      "displayOrder": 9,
+      "metadata": []
+    },
+    {
+      "id": "adf7dae5-b262-4dec-ad46-f707831ed0da",
+      "numericId": 10,
+      "status": "mitigationIdentified",
+      "content": "Implement per-user concurrent sandbox limits, global sandbox count limits, and disk usage quotas. Add container cleanup on timeout. Monitor container count via CloudWatch metrics.",
+      "displayOrder": 10,
+      "metadata": []
+    },
+    {
+      "id": "31e8866a-b937-4091-ad22-a1f2b9f4465b",
+      "numericId": 11,
+      "status": "mitigationIdentified",
+      "content": "Implement input validation for routing rules and model mappings in admin portal. Restrict target models/endpoints to an allowlist. Add change audit logging for all configuration modifications.",
+      "displayOrder": 11,
+      "metadata": []
+    },
+    {
+      "id": "114e40a0-e79a-4620-96b2-d305cfa26076",
+      "numericId": 12,
+      "status": "mitigationIdentified",
+      "content": "Implement atomic budget updates using DynamoDB conditional writes to prevent race conditions. Add server-side budget enforcement before Bedrock calls. Log budget threshold alerts.",
+      "displayOrder": 12,
+      "metadata": []
+    },
+    {
+      "id": "a1edb8bc-1281-4ed7-b0fe-19a693f9d9ed",
+      "numericId": 13,
+      "status": "mitigationInProgress",
+      "content": "Implement comprehensive audit logging with request IDs, timestamps, API key hashes, user IDs, and action details. Store audit logs in a tamper-evident manner (CloudWatch Logs with retention policy).",
+      "displayOrder": 13,
+      "metadata": []
+    },
+    {
+      "id": "68e2e5cc-8387-4ee8-b97b-7a1a0edf299a",
+      "numericId": 14,
+      "status": "mitigationInProgress",
+      "content": "Use IAM task roles exclusively for ECS deployments instead of static AWS credentials. Remove AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY from environment variables in production. Use ECS task role with least-privilege IAM policies.",
+      "displayOrder": 14,
+      "metadata": []
+    }
+  ],
+  "assumptionLinks": [],
+  "mitigationLinks": [
+    {
+      "linkedId": "f398fa6d-d1cb-4bab-831e-8ee92a846f8b",
+      "mitigationId": "3ef7f372-7f6e-43b5-b281-6fe6a46a43a5"
+    },
+    {
+      "linkedId": "d89562f4-2b41-4a69-9072-016f4adeb31e",
+      "mitigationId": "223ff558-47ec-4607-b31b-15d31a5ab59c"
+    },
+    {
+      "linkedId": "95f7cd64-d42d-488b-9451-927c94cbe254",
+      "mitigationId": "e69a12b8-ffe6-4692-9320-1041a81fdfb1"
+    },
+    {
+      "linkedId": "b19c1d3b-b6c7-49bf-ad2c-e5cc44d45d77",
+      "mitigationId": "eec7aeee-eb4d-4fc2-b5a6-9ced9fea565f"
+    },
+    {
+      "linkedId": "d042f807-7e90-47f2-a2c9-c8c865b4130c",
+      "mitigationId": "971cbfb8-0b71-4676-a221-5150468f7975"
+    },
+    {
+      "linkedId": "fb81c648-ed75-4a5f-88e2-637cd83df357",
+      "mitigationId": "336e2309-cdaa-4150-bfdb-f0506016feba"
+    },
+    {
+      "linkedId": "06870418-76e5-4ff1-9be3-79b6a9331ec5",
+      "mitigationId": "7344f72c-62c7-4c8c-b651-022eb3b76848"
+    },
+    {
+      "linkedId": "7def45f3-188e-420e-992b-e55b601fd5cb",
+      "mitigationId": "31e8866a-b937-4091-ad22-a1f2b9f4465b"
+    },
+    {
+      "linkedId": "c8683f95-98c5-4e8f-869b-4045b5f5ea3b",
+      "mitigationId": "114e40a0-e79a-4620-96b2-d305cfa26076"
+    },
+    {
+      "linkedId": "ea7c321e-1ac7-4419-b9c6-d328592d4022",
+      "mitigationId": "707edb04-2e83-4b0f-b4b6-c59ca8672d66"
+    },
+    {
+      "linkedId": "798fd3e2-37d1-4656-a146-7ef9f8cd6e58",
+      "mitigationId": "68e2e5cc-8387-4ee8-b97b-7a1a0edf299a"
+    },
+    {
+      "linkedId": "da6fe72d-7cbe-4346-9e32-f8ba992b66d1",
+      "mitigationId": "adf7dae5-b262-4dec-ad46-f707831ed0da"
+    },
+    {
+      "linkedId": "b69e3f00-062f-43f6-a589-1dc2595e39c6",
+      "mitigationId": "c9fc1f6f-2528-41b5-b58e-493111c4a63c"
+    },
+    {
+      "linkedId": "e9a0160b-ca6f-4462-8fe3-860599cb0334",
+      "mitigationId": "a1edb8bc-1281-4ed7-b0fe-19a693f9d9ed"
+    }
+  ],
+  "threats": [
+    {
+      "id": "f398fa6d-d1cb-4bab-831e-8ee92a846f8b",
+      "numericId": 1,
+      "threatSource": "External Attacker",
+      "prerequisites": "with network access to the ALB",
+      "threatAction": "intercept API keys transmitted over unencrypted HTTP between ALB and ECS tasks",
+      "threatImpact": "exposure of API keys enabling unauthorized access to the proxy and Bedrock models",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008"
+      ],
+      "statement": "A External Attacker with network access to the ALB can intercept API keys transmitted over unencrypted HTTP between ALB and ECS tasks, which leads to exposure of API keys enabling unauthorized access to the proxy and Bedrock models",
+      "displayOrder": 1,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Network",
+        "API-Key"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "d89562f4-2b41-4a69-9072-016f4adeb31e",
+      "numericId": 2,
+      "threatSource": "External Attacker",
+      "prerequisites": "with a stolen or brute-forced API key",
+      "threatAction": "impersonate a legitimate user by replaying a stolen API key",
+      "threatImpact": "unauthorized access to Bedrock models, usage charged to victim's account, budget exhaustion",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008"
+      ],
+      "statement": "A External Attacker with a stolen or brute-forced API key can impersonate a legitimate user by replaying a stolen API key, which leads to unauthorized access to Bedrock models, usage charged to victim's account, budget exhaustion",
+      "displayOrder": 2,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "Authentication"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "95f7cd64-d42d-488b-9451-927c94cbe254",
+      "numericId": 3,
+      "threatSource": "External Attacker",
+      "prerequisites": "with knowledge of the master API key",
+      "threatAction": "use the master API key to bypass all rate limiting and access controls",
+      "threatImpact": "unrestricted access to all proxy functionality, no rate limiting, full admin capabilities",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A008"
+      ],
+      "statement": "A External Attacker with knowledge of the master API key can use the master API key to bypass all rate limiting and access controls, which leads to unrestricted access to all proxy functionality, no rate limiting, full admin capabilities",
+      "displayOrder": 3,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "Authentication",
+        "Master-Key"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "b19c1d3b-b6c7-49bf-ad2c-e5cc44d45d77",
+      "numericId": 4,
+      "threatSource": "Malicious API Consumer",
+      "prerequisites": "with ability to submit code for PTC execution",
+      "threatAction": "escape the Docker sandbox container to gain access to the host EC2 instance via Docker socket exploitation",
+      "threatImpact": "full host compromise, access to other containers, AWS credentials, and DynamoDB data",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A014"
+      ],
+      "statement": "A Malicious API Consumer with ability to submit code for PTC execution can escape the Docker sandbox container to gain access to the host EC2 instance via Docker socket exploitation, which leads to full host compromise, access to other containers, AWS credentials, and DynamoDB data",
+      "displayOrder": 4,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-E",
+        "Container-Escape",
+        "PTC"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "d042f807-7e90-47f2-a2c9-c8c865b4130c",
+      "numericId": 5,
+      "threatSource": "External Attacker",
+      "prerequisites": "with network access to the public ALB",
+      "threatAction": "flood the proxy with requests to exhaust rate limits, Bedrock quotas, or DynamoDB capacity",
+      "threatImpact": "service unavailability for legitimate users, increased AWS costs, Bedrock throttling",
+      "impactedGoal": [],
+      "impactedAssets": [],
+      "statement": "A External Attacker with network access to the public ALB can flood the proxy with requests to exhaust rate limits, Bedrock quotas, or DynamoDB capacity, which leads to service unavailability for legitimate users, increased AWS costs, Bedrock throttling",
+      "displayOrder": 5,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "DDoS",
+        "Availability"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "fb81c648-ed75-4a5f-88e2-637cd83df357",
+      "numericId": 6,
+      "threatSource": "Insider",
+      "prerequisites": "with access to application logs or monitoring systems",
+      "threatAction": "extract sensitive user prompts, model responses, or API keys from application logs or debug output",
+      "threatImpact": "exposure of confidential user data, prompt content, and potentially API credentials",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010"
+      ],
+      "statement": "A Insider with access to application logs or monitoring systems can extract sensitive user prompts, model responses, or API keys from application logs or debug output, which leads to exposure of confidential user data, prompt content, and potentially API credentials",
+      "displayOrder": 6,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Logging",
+        "Data-Leakage"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "06870418-76e5-4ff1-9be3-79b6a9331ec5",
+      "numericId": 7,
+      "threatSource": "Insider",
+      "prerequisites": "with access to DynamoDB and knowledge of the Fernet encryption secret",
+      "threatAction": "decrypt provider API keys stored in DynamoDB by obtaining the Fernet encryption secret from environment variables",
+      "threatImpact": "exposure of all third-party provider API keys, enabling unauthorized use of Bedrock, Tavily, Brave, and OpenAI services",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A009"
+      ],
+      "statement": "A Insider with access to DynamoDB and knowledge of the Fernet encryption secret can decrypt provider API keys stored in DynamoDB by obtaining the Fernet encryption secret from environment variables, which leads to exposure of all third-party provider API keys, enabling unauthorized use of Bedrock, Tavily, Brave, and OpenAI services",
+      "displayOrder": 7,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Encryption",
+        "Provider-Keys"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "7def45f3-188e-420e-992b-e55b601fd5cb",
+      "numericId": 8,
+      "threatSource": "External Attacker",
+      "prerequisites": "with access to the admin portal (unauthenticated if Cognito not configured)",
+      "threatAction": "modify routing rules, failover chains, or model mappings to redirect traffic to attacker-controlled endpoints or models",
+      "threatImpact": "traffic redirection, data exfiltration via malicious model endpoints, service disruption",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A013"
+      ],
+      "statement": "A External Attacker with access to the admin portal (unauthenticated if Cognito not configured) can modify routing rules, failover chains, or model mappings to redirect traffic to attacker-controlled endpoints or models, which leads to traffic redirection, data exfiltration via malicious model endpoints, service disruption",
+      "displayOrder": 8,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-T",
+        "Admin-Portal",
+        "Configuration"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "c8683f95-98c5-4e8f-869b-4045b5f5ea3b",
+      "numericId": 9,
+      "threatSource": "Malicious API Consumer",
+      "prerequisites": "with a valid API key",
+      "threatAction": "exploit budget rollover logic or race conditions to bypass monthly budget limits and consume resources beyond allocated budget",
+      "threatImpact": "financial loss from excessive Bedrock usage, budget tracking integrity compromise",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A011"
+      ],
+      "statement": "A Malicious API Consumer with a valid API key can exploit budget rollover logic or race conditions to bypass monthly budget limits and consume resources beyond allocated budget, which leads to financial loss from excessive Bedrock usage, budget tracking integrity compromise",
+      "displayOrder": 9,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-T",
+        "Budget",
+        "Billing"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "ea7c321e-1ac7-4419-b9c6-d328592d4022",
+      "numericId": 10,
+      "threatSource": "External Attacker",
+      "prerequisites": "when Cognito is not configured in the deployment",
+      "threatAction": "access the admin portal without authentication due to development mode fallback when Cognito is not configured",
+      "threatImpact": "full admin access to API key management, pricing, routing, and failover configuration without any authentication",
+      "impactedGoal": [],
+      "impactedAssets": [],
+      "statement": "A External Attacker when Cognito is not configured in the deployment can access the admin portal without authentication due to development mode fallback when Cognito is not configured, which leads to full admin access to API key management, pricing, routing, and failover configuration without any authentication",
+      "displayOrder": 10,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-S",
+        "Admin-Portal",
+        "Authentication-Bypass"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "798fd3e2-37d1-4656-a146-7ef9f8cd6e58",
+      "numericId": 11,
+      "threatSource": "Insider",
+      "prerequisites": "with access to environment variables or container configuration",
+      "threatAction": "extract AWS credentials, master API key, or encryption secrets from environment variables or .env files",
+      "threatImpact": "full AWS account compromise, access to all DynamoDB data, Bedrock, and Secrets Manager",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A012"
+      ],
+      "statement": "A Insider with access to environment variables or container configuration can extract AWS credentials, master API key, or encryption secrets from environment variables or .env files, which leads to full AWS account compromise, access to all DynamoDB data, Bedrock, and Secrets Manager",
+      "displayOrder": 11,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "Credentials",
+        "Environment"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "da6fe72d-7cbe-4346-9e32-f8ba992b66d1",
+      "numericId": 12,
+      "threatSource": "Malicious API Consumer",
+      "prerequisites": "with a valid API key and PTC enabled",
+      "threatAction": "spawn excessive PTC sandbox containers to exhaust host resources (memory, CPU, disk)",
+      "threatImpact": "host resource exhaustion, service degradation for all users, potential container runtime failure",
+      "impactedGoal": [],
+      "impactedAssets": [],
+      "statement": "A Malicious API Consumer with a valid API key and PTC enabled can spawn excessive PTC sandbox containers to exhaust host resources (memory, CPU, disk), which leads to host resource exhaustion, service degradation for all users, potential container runtime failure",
+      "displayOrder": 12,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-D",
+        "PTC",
+        "Resource-Exhaustion"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "b69e3f00-062f-43f6-a589-1dc2595e39c6",
+      "numericId": 13,
+      "threatSource": "Malicious API Consumer",
+      "prerequisites": "with a valid API key and web search/fetch enabled",
+      "threatAction": "abuse web fetch tool to perform server-side request forgery (SSRF) against internal AWS metadata endpoints or VPC resources",
+      "threatImpact": "exposure of EC2 instance metadata, IAM credentials, or internal service data",
+      "impactedGoal": [],
+      "impactedAssets": [
+        "A010"
+      ],
+      "statement": "A Malicious API Consumer with a valid API key and web search/fetch enabled can abuse web fetch tool to perform server-side request forgery (SSRF) against internal AWS metadata endpoints or VPC resources, which leads to exposure of EC2 instance metadata, IAM credentials, or internal service data",
+      "displayOrder": 13,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-I",
+        "SSRF",
+        "Web-Search"
+      ],
+      "metadata": []
+    },
+    {
+      "id": "e9a0160b-ca6f-4462-8fe3-860599cb0334",
+      "numericId": 14,
+      "threatSource": "Malicious API Consumer",
+      "prerequisites": "with a valid API key",
+      "threatAction": "deny having made specific API requests due to insufficient audit logging or shared API keys",
+      "threatImpact": "inability to attribute actions to specific users, compliance issues, dispute resolution failures",
+      "impactedGoal": [],
+      "impactedAssets": [],
+      "statement": "A Malicious API Consumer with a valid API key can deny having made specific API requests due to insufficient audit logging or shared API keys, which leads to inability to attribute actions to specific users, compliance issues, dispute resolution failures",
+      "displayOrder": 14,
+      "status": "threatIdentified",
+      "tags": [
+        "STRIDE-R",
+        "Logging",
+        "Audit"
+      ],
+      "metadata": []
+    }
+  ]
+}
