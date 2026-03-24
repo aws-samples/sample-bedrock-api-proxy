@@ -214,16 +214,27 @@ echo -e "  Email: ${YELLOW}${EMAIL}${NC}"
 echo -e "  Temporary Password: ${YELLOW}${TEMP_PASSWORD}${NC}"
 echo
 echo -e "${BLUE}Admin Portal URL:${NC}"
-ALB_DNS=$(aws cloudformation describe-stacks \
+CF_DOMAIN=$(aws cloudformation describe-stacks \
     --stack-name "AnthropicProxy-${ENVIRONMENT}-ECS" \
     --region "$REGION" \
-    --query 'Stacks[0].Outputs[?OutputKey==`ALBDNSName`].OutputValue' \
+    --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDomainName`].OutputValue' \
     --output text 2>/dev/null || echo "N/A")
 
-if [[ "$ALB_DNS" != "N/A" ]]; then
-    echo -e "  http://${ALB_DNS}/admin/"
+if [[ "$CF_DOMAIN" != "N/A" && -n "$CF_DOMAIN" ]]; then
+    echo -e "  https://${CF_DOMAIN}/admin/"
 else
-    echo -e "  ${YELLOW}(ALB not found - check ECS stack deployment)${NC}"
+    ALB_DNS=$(aws cloudformation describe-stacks \
+        --stack-name "AnthropicProxy-${ENVIRONMENT}-ECS" \
+        --region "$REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`ALBDNSName`].OutputValue' \
+        --output text 2>/dev/null || echo "N/A")
+
+    if [[ "$ALB_DNS" != "N/A" && -n "$ALB_DNS" ]]; then
+        echo -e "  http://${ALB_DNS}/admin/"
+        echo -e "  ${YELLOW}(HTTP only - CloudFront not enabled)${NC}"
+    else
+        echo -e "  ${YELLOW}(URL not found - check ECS stack deployment)${NC}"
+    fi
 fi
 
 echo

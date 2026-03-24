@@ -100,10 +100,6 @@ export interface EnvironmentConfig {
   adminPortalContainerPort: number; // Container port (8005)
   adminPortalHealthCheckPath: string; // Health check path
 
-  // HTTPS/TLS Configuration
-  certificateArn?: string;
-  enableHttpsRedirect: boolean;
-
   // DynamoDB Configuration
   dynamodbBillingMode: 'PAY_PER_REQUEST' | 'PROVISIONED';
   dynamodbReadCapacity?: number;
@@ -112,6 +108,10 @@ export interface EnvironmentConfig {
   // Logging Configuration
   logRetentionDays: number;
   enableContainerInsights: boolean;
+
+  // CloudFront Configuration
+  enableCloudFront: boolean;            // Enable CloudFront distribution with HTTPS
+  cloudFrontOriginReadTimeout: number;  // Origin read timeout in seconds (default max 60; up to 180 with AWS quota increase)
 
   // Tags
   tags: { [key: string]: string };
@@ -132,7 +132,7 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // ECS
     ecsDesiredCount: 1,
     ecsCpu: 1024,          // 1 vCPU
-    ecsMemory: 4096,       // 4 GB
+    ecsMemory: 2048,       // 2 GB
     ecsMinCapacity: 1,
     ecsMaxCapacity: 2,
     ecsTargetCpuUtilization: 70,
@@ -206,11 +206,12 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     adminPortalContainerPort: 8005,
     adminPortalHealthCheckPath: '/health',
 
-    // HTTPS/TLS
-    enableHttpsRedirect: false,
-
     // DynamoDB
     dynamodbBillingMode: 'PAY_PER_REQUEST',
+
+    // CloudFront (HTTPS)
+    enableCloudFront: false,
+    cloudFrontOriginReadTimeout: 60,  // Max 60s default; request AWS quota increase for up to 180s
 
     // Logging
     logRetentionDays: 7,
@@ -309,11 +310,12 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     adminPortalContainerPort: 8005,
     adminPortalHealthCheckPath: '/health',
 
-    // HTTPS/TLS
-    enableHttpsRedirect: true,
-
     // DynamoDB
     dynamodbBillingMode: 'PAY_PER_REQUEST',
+
+    // CloudFront (HTTPS)
+    enableCloudFront: false,
+    cloudFrontOriginReadTimeout: 60,  // Max 60s default; request AWS quota increase for up to 180s
 
     // Logging
     logRetentionDays: 30,
@@ -363,10 +365,11 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
   }
 
   // Get platform from environment variable (set by deploy script)
-  const platform = process.env.CDK_PLATFORM as 'arm64' | 'amd64';
-  if (!platform || !['arm64', 'amd64'].includes(platform)) {
+  // Default to 'arm64' when not specified (e.g., during `cdk bootstrap`)
+  const platform = (process.env.CDK_PLATFORM as 'arm64' | 'amd64') || 'arm64';
+  if (!['arm64', 'amd64'].includes(platform)) {
     throw new Error(
-      `Platform must be specified via CDK_PLATFORM environment variable. Valid values: arm64, amd64. Got: ${platform}`
+      `Platform must be 'arm64' or 'amd64'. Got: ${platform}`
     );
   }
 
@@ -406,6 +409,11 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ? process.env.ENABLE_OPENAI_COMPAT.toLowerCase() === 'true'
     : config.enableOpenaiCompat;
 
+  // Override CloudFront settings from environment variables
+  const enableCloudFront = process.env.ENABLE_CLOUDFRONT
+    ? process.env.ENABLE_CLOUDFRONT.toLowerCase() === 'true'
+    : config.enableCloudFront;
+
   return {
     ...config,
     platform,
@@ -416,6 +424,7 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     enableWebSearch,
     enableWebFetch,
     enableOpenaiCompat,
+    enableCloudFront,
     ...(process.env.OPENAI_BASE_URL && { openaiBaseUrl: process.env.OPENAI_BASE_URL }),
     ...(process.env.OTEL_EXPORTER_OTLP_ENDPOINT && { otelExporterEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT }),
     ...(process.env.OTEL_EXPORTER_OTLP_PROTOCOL && { otelExporterProtocol: process.env.OTEL_EXPORTER_OTLP_PROTOCOL }),
@@ -430,6 +439,5 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ...(process.env.WEB_FETCH_DEFAULT_MAX_USES && { webFetchDefaultMaxUses: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_USES) }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS && { webFetchDefaultMaxContentTokens: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS) }),
     ...(process.env.DEFAULT_CACHE_TTL && { defaultCacheTtl: process.env.DEFAULT_CACHE_TTL }),
-    ...(process.env.CERTIFICATE_ARN && { certificateArn: process.env.CERTIFICATE_ARN }),
   };
 }

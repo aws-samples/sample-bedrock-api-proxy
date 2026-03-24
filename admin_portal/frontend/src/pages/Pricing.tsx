@@ -113,7 +113,8 @@ function PricingForm({
           <option value="Qwen">Qwen</option>
           <option value="DeepSeek">DeepSeek</option>
           <option value="MiniMax">MiniMax</option>
-          <option value="Kimi">Kimi</option>
+          <option value="Moonshot AI">Moonshot AI</option>
+          <option value="Z AI">Z AI</option>
           <option value="NVIDIA">NVIDIA</option>
           <option value="Cohere">Cohere</option>
           <option value="AI21 Labs">AI21 Labs</option>

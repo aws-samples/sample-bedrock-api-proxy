@@ -48,9 +48,6 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         self.client_id = os.getenv("COGNITO_CLIENT_ID", "")
         self.region = os.getenv("COGNITO_REGION", os.getenv("AWS_REGION", "us-east-1"))
 
-        # Check if dev mode is explicitly enabled
-        self.dev_mode = os.getenv("ADMIN_DEV_MODE", "false").lower() in ("true", "1", "yes")
-
         # Initialize JWT validator if configuration is available
         self._validator: Optional[CognitoJWTValidator] = None
         if self.user_pool_id and self.client_id:
@@ -58,20 +55,6 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
                 user_pool_id=self.user_pool_id,
                 client_id=self.client_id,
                 region=self.region,
-            )
-
-        # Startup logging for security posture
-        logger = logging.getLogger(__name__)
-        if self.dev_mode:
-            logger.warning(
-                "ADMIN_DEV_MODE is enabled: Cognito authentication is bypassed. "
-                "Do NOT use this in production."
-            )
-        elif not self.is_configured:
-            logger.error(
-                "Cognito is not configured and ADMIN_DEV_MODE is not enabled. "
-                "All authenticated admin requests will receive 503 responses. "
-                "Set COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID, or enable ADMIN_DEV_MODE for development."
             )
 
     @property
@@ -116,27 +99,14 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
 
         # Check if Cognito is configured
         if not self.is_configured:
-            if self.dev_mode:
-                # Explicit dev mode - allow access without authentication
-                request.state.user = {
-                    "username": "dev-user",
-                    "email": "dev@example.com",
-                    "development_mode": True,
-                }
-                return await call_next(request)
-            else:
-                # Auth not configured and dev mode not enabled - reject
-                return JSONResponse(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    content={
-                        "error": "auth_not_configured",
-                        "message": (
-                            "Cognito authentication is not configured. "
-                            "Set COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID, "
-                            "or set ADMIN_DEV_MODE=true for development."
-                        ),
-                    },
-                )
+            # Development mode - allow access without authentication
+            # This allows testing when Cognito is not set up
+            request.state.user = {
+                "username": "dev-user",
+                "email": "dev@example.com",
+                "development_mode": True,
+            }
+            return await call_next(request)
 
         # Extract token from header
         token = self._extract_token(request)

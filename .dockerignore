@@ -25,18 +25,18 @@ htmlcov/
 *.swo
 *~
 .DS_Store
-
+tests/captures/
+tests/input.log.json
 # Git
 .git/
 .gitignore
 .gitattributes
-.ruff_cache/
-.threatmodel/
+
 # Documentation
 docs/
 *.md
 !README.md
-.
+
 # Claude
 .claude/
 

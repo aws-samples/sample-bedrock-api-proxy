@@ -6,8 +6,9 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
 import { EnvironmentConfig } from '../config/config';
@@ -38,6 +39,8 @@ export class ECSStack extends cdk.Stack {
   public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly listener: elbv2.ApplicationListener;
   public taskDefinition: ecs.TaskDefinition;
+  public distribution?: cloudfront.Distribution;
+  private adminTargetGroup?: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: ECSStackProps) {
     super(scope, id, props);
@@ -81,7 +84,6 @@ export class ECSStack extends cdk.Stack {
       : elbv2.TargetType.IP;
 
     const targetGroup = new elbv2.ApplicationTargetGroup(this, 'TargetGroup', {
-      targetGroupName: `anthropic-proxy-${config.environmentName}-tg`,
       vpc,
       port: config.containerPort,
       protocol: elbv2.ApplicationProtocol.HTTP,
@@ -100,44 +102,12 @@ export class ECSStack extends cdk.Stack {
       stickinessCookieDuration: cdk.Duration.seconds(300), // 5 minutes - matches PTC session timeout
     });
 
-    // Create Listener (HTTPS if certificate provided, otherwise HTTP)
-    if (config.certificateArn) {
-      const certificate = acm.Certificate.fromCertificateArn(
-        this, 'Certificate', config.certificateArn
-      );
-      this.listener = this.alb.addListener('HTTPSListener', {
-        port: 443,
-        protocol: elbv2.ApplicationProtocol.HTTPS,
-        certificates: [certificate],
-        defaultTargetGroups: [targetGroup],
-      });
-
-      if (config.enableHttpsRedirect) {
-        this.alb.addListener('HTTPRedirectListener', {
-          port: 80,
-          protocol: elbv2.ApplicationProtocol.HTTP,
-          defaultAction: elbv2.ListenerAction.redirect({
-            protocol: 'HTTPS',
-            port: '443',
-            permanent: true,
-          }),
-        });
-      }
-    } else {
-      // Fallback: HTTP-only listener (development)
-      this.listener = this.alb.addListener('HTTPListener', {
-        port: 80,
-        protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultTargetGroups: [targetGroup],
-      });
-
-      if (config.enableHttpsRedirect) {
-        console.warn(
-          'WARNING: enableHttpsRedirect is true but no certificateArn provided. '
-          + 'HTTPS redirect will not be configured.'
-        );
-      }
-    }
+    // Create HTTP Listener
+    this.listener = this.alb.addListener('HTTPListener', {
+      port: 80,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      defaultTargetGroups: [targetGroup],
+    });
 
     // Create CloudWatch Log Group
     const logGroup = new logs.LogGroup(this, 'LogGroup', {
@@ -146,12 +116,10 @@ export class ECSStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Generate a short random suffix to prevent role name conflicts
-    const roleSuffix = Math.random().toString(36).substring(2, 8);
-
     // Create Task Execution Role
+    // Note: no explicit roleName — CDK generates a stable, unique name from the construct path.
+    // Explicit names with random suffixes cause replacement on every deploy and orphan old roles.
     const taskExecutionRole = new iam.Role(this, 'TaskExecutionRole', {
-      roleName: `anthropic-proxy-${config.environmentName}-task-execution-${roleSuffix}`,
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
@@ -160,7 +128,6 @@ export class ECSStack extends cdk.Stack {
 
     // Create Task Role
     const taskRole = new iam.Role(this, 'TaskRole', {
-      roleName: `anthropic-proxy-${config.environmentName}-task-${roleSuffix}`,
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
 
@@ -357,6 +324,139 @@ export class ECSStack extends cdk.Stack {
       );
     }
 
+    // CloudFront HTTPS (if enabled)
+    if (config.enableCloudFront) {
+      // Generate a secret value for ALB header validation
+      const cloudFrontSecret = new secretsmanager.Secret(this, 'CloudFrontSecret', {
+        secretName: `anthropic-proxy-${config.environmentName}-cloudfront-secret`,
+        description: 'Secret header value for CloudFront-to-ALB validation',
+        generateSecretString: {
+          excludePunctuation: true,
+          passwordLength: 32,
+        },
+        removalPolicy: config.environmentName === 'prod'
+          ? cdk.RemovalPolicy.RETAIN
+          : cdk.RemovalPolicy.DESTROY,
+      });
+
+      // Create Response Headers Policy with HSTS
+      const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'ResponseHeadersPolicy', {
+        responseHeadersPolicyName: `anthropic-proxy-${config.environmentName}-hsts`,
+        securityHeadersBehavior: {
+          strictTransportSecurity: {
+            accessControlMaxAge: cdk.Duration.seconds(31536000),
+            includeSubdomains: true,
+            override: true,
+          },
+        },
+      });
+
+      // Create CloudFront Distribution
+      // NOTE: readTimeout (default 60s, max 180s with quota increase) affects:
+      //   - Streaming: only time-to-first-byte (message_start arrives quickly, so 60s is fine)
+      //   - Non-streaming: entire response generation time (may 504 if Bedrock takes >60s)
+      //   Recommend streaming mode when using CloudFront. For non-streaming with long
+      //   responses, request AWS quota increase via Support Console.
+      const distribution = new cloudfront.Distribution(this, 'Distribution', {
+        comment: `Anthropic Proxy ${config.environmentName} - HTTPS termination`,
+        defaultBehavior: {
+          origin: new origins.HttpOrigin(this.alb.loadBalancerDnsName, {
+            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+            readTimeout: cdk.Duration.seconds(config.cloudFrontOriginReadTimeout),
+            customHeaders: {
+              'X-CloudFront-Secret': cloudFrontSecret.secretValue.unsafeUnwrap(),
+            },
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy,
+        },
+        priceClass: cloudfront.PriceClass.PRICE_CLASS_ALL,
+      });
+
+      this.distribution = distribution;
+
+      // Modify ALB listener: change default action to reject requests without the secret header
+      const cfnListener = this.listener.node.defaultChild as elbv2.CfnListener;
+      cfnListener.defaultActions = [
+        {
+          type: 'fixed-response',
+          fixedResponseConfig: {
+            statusCode: '403',
+            contentType: 'text/plain',
+            messageBody: 'Forbidden - Direct ALB access is not allowed',
+          },
+        },
+      ];
+
+      // Add rule that allows traffic with the correct secret header (main API)
+      new elbv2.ApplicationListenerRule(this, 'CloudFrontValidationRule', {
+        listener: this.listener,
+        priority: 100,
+        conditions: [
+          elbv2.ListenerCondition.httpHeader('X-CloudFront-Secret', [
+            cloudFrontSecret.secretValue.unsafeUnwrap(),
+          ]),
+        ],
+        targetGroups: [targetGroup],
+      });
+
+      // Admin portal routes with header validation
+      // NOTE: Priorities 15/25 (not 10/20) to avoid conflicts during CloudFormation updates
+      // when transitioning from non-CloudFront rules (priority 10/20) to CloudFront rules.
+      // CloudFormation creates new resources before deleting old ones, so overlapping priorities fail.
+      if (config.adminPortalEnabled && this.adminTargetGroup) {
+        new elbv2.ApplicationListenerRule(this, 'AdminPortalCloudFrontRule', {
+          listener: this.listener,
+          priority: 15,
+          conditions: [
+            elbv2.ListenerCondition.pathPatterns(['/admin', '/admin/*']),
+            elbv2.ListenerCondition.httpHeader('X-CloudFront-Secret', [
+              cloudFrontSecret.secretValue.unsafeUnwrap(),
+            ]),
+          ],
+          targetGroups: [this.adminTargetGroup],
+        });
+
+        new elbv2.ApplicationListenerRule(this, 'AdminApiCloudFrontRule', {
+          listener: this.listener,
+          priority: 25,
+          conditions: [
+            elbv2.ListenerCondition.pathPatterns(['/api/*']),
+            elbv2.ListenerCondition.httpHeader('X-CloudFront-Secret', [
+              cloudFrontSecret.secretValue.unsafeUnwrap(),
+            ]),
+          ],
+          targetGroups: [this.adminTargetGroup],
+        });
+      }
+
+      // CloudFront Outputs
+      new cdk.CfnOutput(this, 'CloudFrontDomainName', {
+        value: distribution.distributionDomainName,
+        description: 'CloudFront Distribution Domain Name',
+      });
+
+      new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
+        value: distribution.distributionId,
+        description: 'CloudFront Distribution ID',
+      });
+
+      new cdk.CfnOutput(this, 'ProxyURL', {
+        value: `https://${distribution.distributionDomainName}`,
+        description: 'Proxy URL (HTTPS via CloudFront)',
+      });
+
+      if (config.adminPortalEnabled) {
+        new cdk.CfnOutput(this, 'AdminPortalHTTPSURL', {
+          value: `https://${distribution.distributionDomainName}/admin/`,
+          description: 'Admin Portal URL (HTTPS via CloudFront)',
+        });
+      }
+    }
+
     // Apply tags
     cdk.Tags.of(this.cluster).add('Environment', config.environmentName);
     cdk.Tags.of(this.cluster).add('LaunchType', config.launchType);
@@ -467,7 +567,6 @@ export class ECSStack extends cdk.Stack {
 
     // Create Fargate Service
     const service = new ecs.FargateService(this, 'Service', {
-      serviceName: `anthropic-proxy-${config.environmentName}`,
       cluster: this.cluster,
       taskDefinition,
       desiredCount: config.ecsDesiredCount,
@@ -568,7 +667,7 @@ export class ECSStack extends cdk.Stack {
       `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
       'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
       // Ensure Docker socket has correct permissions for PTC
-      'chmod 660 /var/run/docker.sock',
+      'chmod 666 /var/run/docker.sock',
     );
 
     // Create Auto Scaling Group
@@ -686,7 +785,6 @@ export class ECSStack extends cdk.Stack {
     // Note: In bridge networking mode, security groups are applied at EC2 instance level (via ASG),
     // not at the service level. Do not specify securityGroups, vpcSubnets, or assignPublicIp here.
     const service = new ecs.Ec2Service(this, 'Service', {
-      serviceName: `anthropic-proxy-${config.environmentName}`,
       cluster: this.cluster,
       taskDefinition,
       desiredCount: config.ecsDesiredCount,
@@ -845,7 +943,6 @@ export class ECSStack extends cdk.Stack {
 
     // Create Admin Portal Target Group
     const adminTargetGroup = new elbv2.ApplicationTargetGroup(this, 'AdminPortalTargetGroup', {
-      targetGroupName: `admin-portal-${config.environmentName}-tg`,
       vpc,
       port: config.adminPortalContainerPort,
       protocol: elbv2.ApplicationProtocol.HTTP,
@@ -861,28 +958,33 @@ export class ECSStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 
-    // Add path-based routing rule for /admin/*
-    this.listener.addTargetGroups('AdminPortalRouting', {
-      priority: 10, // Higher priority than default
-      conditions: [
-        elbv2.ListenerCondition.pathPatterns(['/admin', '/admin/*']),
-      ],
-      targetGroups: [adminTargetGroup],
-    });
+    // Store admin target group for CloudFront header validation rules
+    this.adminTargetGroup = adminTargetGroup;
 
-    // Add path-based routing rule for /api/* (admin portal API endpoints)
-    // This routes authentication, dashboard, API keys, and pricing endpoints to admin portal
-    this.listener.addTargetGroups('AdminPortalApiRouting', {
-      priority: 20, // Higher priority than default, lower than /admin
-      conditions: [
-        elbv2.ListenerCondition.pathPatterns(['/api/*']),
-      ],
-      targetGroups: [adminTargetGroup],
-    });
+    // Only add listener rules here if CloudFront is NOT enabled.
+    // When CloudFront is enabled, the constructor adds rules with header validation.
+    if (!config.enableCloudFront) {
+      // Add path-based routing rule for /admin/*
+      this.listener.addTargetGroups('AdminPortalRouting', {
+        priority: 10,
+        conditions: [
+          elbv2.ListenerCondition.pathPatterns(['/admin', '/admin/*']),
+        ],
+        targetGroups: [adminTargetGroup],
+      });
+
+      // Add path-based routing rule for /api/*
+      this.listener.addTargetGroups('AdminPortalApiRouting', {
+        priority: 20,
+        conditions: [
+          elbv2.ListenerCondition.pathPatterns(['/api/*']),
+        ],
+        targetGroups: [adminTargetGroup],
+      });
+    }
 
     // Create Admin Portal Fargate Service
     const adminService = new ecs.FargateService(this, 'AdminPortalService', {
-      serviceName: `admin-portal-${config.environmentName}`,
       cluster: this.cluster,
       taskDefinition: adminTaskDefinition,
       desiredCount: config.adminPortalMinCapacity,
@@ -925,9 +1027,13 @@ export class ECSStack extends cdk.Stack {
       description: 'Admin Portal ECS Service Name',
     });
 
-    new cdk.CfnOutput(this, 'AdminPortalURL', {
-      value: `http://${this.alb.loadBalancerDnsName}/admin/`,
-      description: 'Admin Portal URL',
-    });
+    // Only output HTTP admin URL when CloudFront is not enabled
+    // (CloudFront outputs its own HTTPS admin URL in the constructor)
+    if (!config.enableCloudFront) {
+      new cdk.CfnOutput(this, 'AdminPortalURL', {
+        value: `http://${this.alb.loadBalancerDnsName}/admin/`,
+        description: 'Admin Portal URL',
+      });
+    }
   }
 }

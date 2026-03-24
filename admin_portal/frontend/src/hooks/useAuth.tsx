@@ -159,7 +159,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const result = await signIn({ username, password });
+        const result = await signIn({
+          username,
+          password,
+          options: { authFlowType: 'USER_PASSWORD_AUTH' },
+        });
 
         if (result.isSignedIn) {
           // Successfully signed in

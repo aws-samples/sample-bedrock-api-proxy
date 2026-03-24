@@ -234,7 +234,8 @@ if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$REGIO
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         cd "$(dirname "$0")/.." || exit 1
-        npx cdk bootstrap "aws://${ACCOUNT_ID}/${REGION}"
+        CDK_PLATFORM="$PLATFORM" CDK_LAUNCH_TYPE="$LAUNCH_TYPE" CDK_ENVIRONMENT="$ENVIRONMENT" \
+            npx cdk bootstrap "aws://${ACCOUNT_ID}/${REGION}"
     else
         echo -e "${RED}Cannot proceed without CDK bootstrap.${NC}"
         exit 1
@@ -330,6 +331,18 @@ else
         --query 'Stacks[0].Outputs[?OutputKey==`AdminPortalURL`].OutputValue' \
         --output text 2>/dev/null || echo "N/A")
 
+    CLOUDFRONT_URL=$(aws cloudformation describe-stacks \
+        --stack-name "AnthropicProxy-${ENVIRONMENT}-ECS" \
+        --region "$REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`ProxyURL`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+
+    CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+        --stack-name "AnthropicProxy-${ENVIRONMENT}-ECS" \
+        --region "$REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDomainName`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+
     # Get Cognito outputs (if Cognito stack exists)
     COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks \
         --stack-name "AnthropicProxy-${ENVIRONMENT}-Cognito" \
@@ -345,9 +358,22 @@ else
 
     echo
     echo -e "${GREEN}Access URLs:${NC}"
-    echo -e "  API Proxy: http://${ALB_DNS}"
-    if [[ "$ADMIN_PORTAL_URL" != "N/A" ]]; then
-        echo -e "  Admin Portal: ${ADMIN_PORTAL_URL}"
+    if [[ -n "$CLOUDFRONT_URL" && "$CLOUDFRONT_URL" != "None" ]]; then
+        echo -e "  API Proxy (HTTPS): ${CLOUDFRONT_URL}"
+        ADMIN_HTTPS_URL=$(aws cloudformation describe-stacks \
+            --stack-name "AnthropicProxy-${ENVIRONMENT}-ECS" \
+            --region "$REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AdminPortalHTTPSURL`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+        if [[ -n "$ADMIN_HTTPS_URL" && "$ADMIN_HTTPS_URL" != "None" ]]; then
+            echo -e "  Admin Portal (HTTPS): ${ADMIN_HTTPS_URL}"
+        fi
+        echo -e "  ALB (internal HTTP): http://${ALB_DNS}"
+    else
+        echo -e "  API Proxy: http://${ALB_DNS}"
+        if [[ "$ADMIN_PORTAL_URL" != "N/A" ]]; then
+            echo -e "  Admin Portal: ${ADMIN_PORTAL_URL}"
+        fi
     fi
     echo
     echo -e "${GREEN}Deployment Configuration:${NC}"
@@ -370,9 +396,17 @@ else
     echo
     echo -e "${YELLOW}Next Steps:${NC}"
     echo -e "  1. Create API keys using: ./scripts/create-api-key.sh"
-    echo -e "  2. Test the health endpoint: curl http://${ALB_DNS}/health"
+    if [[ -n "$CLOUDFRONT_URL" && "$CLOUDFRONT_URL" != "None" ]]; then
+        echo -e "  2. Test the health endpoint: curl ${CLOUDFRONT_URL}/health"
+    else
+        echo -e "  2. Test the health endpoint: curl http://${ALB_DNS}/health"
+    fi
     if [[ "$PTC_ENABLED" == "true" ]]; then
-        echo -e "  3. Test PTC health: curl http://${ALB_DNS}/health/ptc"
+        if [[ -n "$CLOUDFRONT_URL" && "$CLOUDFRONT_URL" != "None" ]]; then
+            echo -e "  3. Test PTC health: curl ${CLOUDFRONT_URL}/health/ptc"
+        else
+            echo -e "  3. Test PTC health: curl http://${ALB_DNS}/health/ptc"
+        fi
     fi
     if [[ "$COGNITO_USER_POOL_ID" != "N/A" ]]; then
         echo -e "  4. Create admin user: ./scripts/create-admin-user.sh -e ${ENVIRONMENT} -r ${REGION} --email <admin@example.com>"
