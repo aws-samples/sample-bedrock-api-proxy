@@ -19,7 +19,7 @@ dependencies = [
     # Web Framework
     "fastapi>=0.119.0",
     "uvicorn[standard]>=0.37.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.22",
     # AWS SDK
     "boto3>=1.42.16",
     "botocore>=1.42.16",
@@ -36,7 +36,6 @@ dependencies = [
     "httpx>=0.27.0",
     # OpenAI SDK (for Bedrock OpenAI-compatible endpoint)
     "openai>=1.60.0",
-    "pytest>=8.4.2",
     # Docker SDK (for Programmatic Tool Calling)
     "docker>=7.0.0",
     # OpenTelemetry (for tracing)
@@ -49,7 +48,7 @@ dependencies = [
     # Web Search (Tavily provider)
     "tavily-python>=0.5.0",
     # Encryption (for Provider Key encryption)
-    "cryptography>=42.0.0",
+    "cryptography>=46.0.5",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +64,7 @@ dev = [
     # AWS Mocking
     "moto[all]>=5.0.0",
     # Code Quality
-    "black>=24.0.0",
+    "black>=26.3.1",
     "ruff>=0.3.0",
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
@@ -88,6 +87,20 @@ Homepage = "https://github.com/yourusername/anthropic-api-proxy"
 Documentation = "https://github.com/yourusername/anthropic-api-proxy/blob/main/README.md"
 Repository = "https://github.com/yourusername/anthropic-api-proxy"
 Issues = "https://github.com/yourusername/anthropic-api-proxy/issues"
+
+[tool.uv]
+# Minimum versions for transitive dependencies to resolve known CVEs
+constraint-dependencies = [
+    "pyasn1>=0.6.3",           # CVE: DoS via unbounded recursion
+    "joserfc>=1.6.3",          # CVE: PBES2 unbounded iteration + uncontrolled resource consumption
+    "urllib3>=2.6.3",          # CVE: decompression-bomb bypass on redirects
+    "starlette>=0.49.1",      # CVE: O(n^2) DoS via Range header merging
+    "requests>=2.33.0",       # CVE: insecure temp file reuse in extract_zipped_paths()
+    "werkzeug>=3.1.6",        # CVE: safe_join() allows Windows special device names
+    "multipart>=1.3.1",       # CVE: ReDoS in parse_options_header()
+    "filelock>=3.20.3",       # CVE: TOCTOU symlink vulnerability
+    "virtualenv>=20.36.1",    # CVE: TOCTOU in directory creation
+]
 
 [build-system]
 requires = ["hatchling"]
