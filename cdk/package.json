@@ -14,7 +14,7 @@
     "diff": "cdk diff"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^25.5.0",
     "aws-cdk": "^2.1113.0",
     "typescript": "^5.3.3"
   },
