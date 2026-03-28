@@ -122,22 +122,45 @@
 ## 使用场景
 
 ### 作为 Claude Code 的模型代理
-* 例如，您可以在启动 `claude` 之前设置以下环境变量，然后就可以在 `claude code` 中使用 Bedrock 中的任何模型（如 `qwen3-coder`）
-```bash
-export CLAUDE_CODE_USE_BEDROCK=0
-export ANTHROPIC_BASE_URL=http://anthropic-proxy-prod-alb-xxxx.elb.amazonaws.com
-export ANTHROPIC_API_KEY=sk-xxxx
-export ANTHROPIC_DEFAULT_SONNET_MODEL=qwen.qwen3-coder-480b-a35b-v1:0
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen.qwen3-235b-a22b-2507-v1:0
+* 例如，您可以在启动 `claude` 之前设置以下环境变量，然后就可以在 `claude code` 中使用 Bedrock 中的模型
+#### 1. 编辑或新增 `.claude.json` 文件
+```json 
+# MacOS & Linux 为 `~/.claude.json`
+# Windows 为`用户目录/.claude.json`
+# 新增 `hasCompletedOnboarding` 参数
+{
+  "hasCompletedOnboarding": true
+}
 ```
-![alt text](assets/image-1.png)
 
-* 如果您**不设置** `ANTHROPIC_DEFAULT_SONNET_MODEL` 和 `ANTHROPIC_DEFAULT_HAIKU_MODEL`，那么代理将默认使用自动映射Claude sonnet 4.5 和 haiku 4.5/3.5 Model ID到Bedrock中对应的Model ID.
-```bash
-export CLAUDE_CODE_USE_BEDROCK=0
-export ANTHROPIC_BASE_URL=http://anthropic-proxy-prod-alb-xxxx.elb.amazonaws.com
-export ANTHROPIC_API_KEY=sk-xxxx
+#### 2. 编辑或新增 `settings.json` 文件
+```json
+# 编辑或新增 `settings.json` 文件
+# MacOS & Linux 为 `~/.claude/settings.json`
+# Windows 为`用户目录/.claude/settings.json`
+# 新增或修改里面的 env 字段
+# 注意替换里面的 `your_api_key` 为您上一步获取到的 API Key
+# 替换ANTHROPIC_BASE_URL为部署之后的base url，如果启用了CloudFront，则是cloudfront 地址，否则是ALB地址
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "your_api_key",
+    "ANTHROPIC_BASE_URL": "base url"
+  }
+}
 ```
+默认已经做了官网Claude 系列模型ID与Bedrock Claude模型ID映射，无需再添加模型环境，如果使用非Claude模型，则还需要继续在`settings.json` 文件"env"增加.  
+```json
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "your_api_key",
+    "ANTHROPIC_BASE_URL": "base url",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "mooonshotai.kimi-k2.5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "mooonshotai.kimi-k2.5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "mooonshotai.kimi-k2.5"
+  }
+}
+```
+
 
 ### 作为 Claude Agent SDK 的模型代理
 - 相同的设置也适用于 Claude Agent SDK

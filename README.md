@@ -125,22 +125,45 @@ This lightweight API convertion service enables you to use various large languag
 ## Usage Cases
 
 ### Model Proxy for Claude Code
-* For example, you can setup below environment variables before start the `claude`, then you can use any models such as `qwen3-coder` in Bedrock for your `claude code`
-```bash
-export CLAUDE_CODE_USE_BEDROCK=0
-export ANTHROPIC_BASE_URL=http://anthropic-proxy-prod-alb-xxxx.elb.amazonaws.com
-export ANTHROPIC_API_KEY=sk-xxxx
-export ANTHROPIC_DEFAULT_SONNET_MODEL=qwen.qwen3-coder-480b-a35b-v1:0
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen.qwen3-235b-a22b-2507-v1:0
+* For example, you can setup below environment variables before start the `claude`
+#### 1. Edit or Create the `.claude.json` File
+```json
+# MacOS & Linux: `~/.claude.json`
+# Windows: `<User Home Directory>/.claude.json`
+# Add the `hasCompletedOnboarding` parameter
+{
+  "hasCompletedOnboarding": true
+}
 ```
-![alt text](assets/image-1.png)
 
-* If you **DON'T** set `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` as below, then the proxy will map the IDs of Claude sonnet 4.5 and haiku 4.5/3.5 to the model IDs in Bedrock by default.
-```bash
-export CLAUDE_CODE_USE_BEDROCK=0
-export ANTHROPIC_BASE_URL=http://anthropic-proxy-prod-alb-xxxx.elb.amazonaws.com
-export ANTHROPIC_API_KEY=sk-xxxx
+#### 2. Edit or Create the `settings.json` File
+```json
+# Edit or create the `settings.json` file
+# MacOS & Linux: `~/.claude/settings.json`
+# Windows: `<User Home Directory>/.claude/settings.json`
+# Add or modify the `env` field inside
+# Make sure to replace `your_api_key` with the API Key you obtained in the previous step
+# Replace ANTHROPIC_BASE_URL with the base URL after deployment. If CloudFront is enabled, use the CloudFront URL; otherwise, use the ALB URL
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "your_api_key",
+    "ANTHROPIC_BASE_URL": "base url"
+  }
+}
 ```
+By default, the mapping between official Claude model IDs and Bedrock Claude model IDs has already been configured, so there is no need to add model environment variables. However, if you are using non-Claude models, you will need to add additional entries to the `"env"` field in the `settings.json` file.
+```json
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "your_api_key",
+    "ANTHROPIC_BASE_URL": "base url",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "mooonshotai.kimi-k2.5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "mooonshotai.kimi-k2.5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "mooonshotai.kimi-k2.5"
+  }
+}
+```
+
 
 ### Model Proxy for Claude Agent SDK
 - The same settings also applicable for Claude Agent SDK
