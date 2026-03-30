@@ -332,9 +332,7 @@ class BedrockService:
                     # Include input_examples if present (for beta feature)
                     if tool.get("input_examples"):
                         tool_dict["input_examples"] = tool["input_examples"]
-                    # Include defer_loading if present (for tool search beta)
-                    if tool.get("defer_loading") is not None:
-                        tool_dict["defer_loading"] = tool["defer_loading"]
+                    # Note: defer_loading is stripped - not supported by Bedrock
                     # Include cache_control if present (for prompt caching)
                     if tool.get("cache_control"):
                         tool_dict["cache_control"] = tool["cache_control"]
@@ -368,9 +366,7 @@ class BedrockService:
                     # Include input_examples if present
                     if hasattr(tool, "input_examples") and tool.input_examples:
                         tool_dict_obj["input_examples"] = tool.input_examples
-                    # Include defer_loading if present
-                    if hasattr(tool, "defer_loading") and tool.defer_loading is not None:
-                        tool_dict_obj["defer_loading"] = tool.defer_loading
+                    # Note: defer_loading is stripped - not supported by Bedrock
                     # Include cache_control if present (for prompt caching)
                     if hasattr(tool, "cache_control") and tool.cache_control:
                         cc = tool.cache_control
