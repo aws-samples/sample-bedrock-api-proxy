@@ -227,8 +227,12 @@ class Settings(BaseSettings):
             "global.anthropic.claude-opus-4-5-20251101-v1:0",
             "claude-opus-4-6",
             "global.anthropic.claude-opus-4-6-v1",
+            "claude-sonnet-4-5-20250929",
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "claude-sonnet-4-6",
-            "global.anthropic.claude-sonnet-4-6"
+            "global.anthropic.claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         ],
         alias="BETA_HEADER_SUPPORTED_MODELS",
         description="List of model IDs that support beta header mapping",
