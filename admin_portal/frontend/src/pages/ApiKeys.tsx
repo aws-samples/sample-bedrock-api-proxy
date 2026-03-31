@@ -8,6 +8,7 @@ import {
   useReactivateApiKey,
   useDeleteApiKey,
   useDashboardStats,
+  useProviders,
 } from '../hooks';
 import type { ApiKey, ApiKeyCreate, ApiKeyUpdate } from '../types';
 import { formatTokens } from '../utils';
@@ -61,6 +62,7 @@ function ApiKeyForm({
 }) {
   const { t } = useTranslation();
   const isEdit = !!initialData;
+  const { data: providersData } = useProviders();
 
   const [formData, setFormData] = useState({
     user_id: initialData?.user_id || '',
@@ -73,11 +75,16 @@ function ApiKeyForm({
     cache_ttl: initialData?.cache_ttl || '',
     routing_strategy: initialData?.routing_strategy || 'off',
     compression_strategy: initialData?.compression_strategy || 'off',
+    provider_id: initialData?.provider_id || '',
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    const submitData = {
+      ...formData,
+      provider_id: formData.provider_id || null,
+    };
+    onSubmit(submitData);
   };
 
   return (
@@ -192,6 +199,27 @@ function ApiKeyForm({
           {!formData.cache_ttl && t('apiKeys.cacheTtlDesc.default')}
           {formData.cache_ttl === '5m' && t('apiKeys.cacheTtlDesc.5m')}
           {formData.cache_ttl === '1h' && t('apiKeys.cacheTtlDesc.1h')}
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1">Provider</label>
+        <select
+          value={formData.provider_id}
+          onChange={(e) => setFormData({ ...formData, provider_id: e.target.value })}
+          className="w-full px-3 py-2 bg-input-bg border border-border-dark rounded-lg text-white focus:border-primary focus:ring-1 focus:ring-primary"
+        >
+          <option value="">Default (Environment Config)</option>
+          {providersData?.items
+            ?.filter((p) => p.is_active)
+            .map((p) => (
+              <option key={p.provider_id} value={p.provider_id}>
+                {p.name} ({p.aws_region})
+              </option>
+            ))}
+        </select>
+        <p className="mt-1 text-xs text-slate-500">
+          Select a Bedrock provider account for this API key, or use the default environment config.
         </p>
       </div>
 

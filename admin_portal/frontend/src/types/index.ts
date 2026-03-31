@@ -5,3 +5,4 @@ export * from './modelMapping';
 export * from './provider-key';
 export * from './routing';
 export * from './failover';
+export * from './provider';
