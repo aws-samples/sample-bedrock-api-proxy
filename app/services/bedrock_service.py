@@ -403,6 +403,23 @@ class BedrockService:
         if request.context_management:
             native_request["context_management"] = request.context_management
 
+        # Auto-inject advanced-tool-use beta header if tools contain defer_loading
+        # but the client didn't send the required beta header.
+        # This prevents Bedrock from rejecting defer_loading with:
+        #   "tools.X.custom.defer_loading: Extra inputs are not permitted"
+        TOOL_SEARCH_BETA = "advanced-tool-use-2025-11-20"
+        if request.tools and settings.enable_tool_use:
+            has_defer_loading = any(
+                (isinstance(t, dict) and t.get("defer_loading") is not None) or
+                (hasattr(t, "defer_loading") and getattr(t, "defer_loading", None) is not None)
+                for t in request.tools
+            )
+            if has_defer_loading:
+                beta_str = anthropic_beta or ""
+                if TOOL_SEARCH_BETA not in beta_str:
+                    anthropic_beta = f"{beta_str},{TOOL_SEARCH_BETA}".strip(",")
+                    print(f"[BEDROCK NATIVE] Auto-injected {TOOL_SEARCH_BETA} beta header: defer_loading detected but beta header missing")
+
         # Add beta headers from client
         # Some headers are mapped (Anthropic → Bedrock), others pass through directly
         bedrock_beta = []
