@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     dynamodb_usage_stats_table: str = Field(
         default="anthropic-proxy-usage-stats", alias="DYNAMODB_USAGE_STATS_TABLE"
     )
+    dynamodb_providers_table: str = Field(
+        default="anthropic-proxy-providers", alias="DYNAMODB_PROVIDERS_TABLE"
+    )
     usage_ttl_days: int = Field(
         default=7,
         alias="USAGE_TTL_DAYS",
