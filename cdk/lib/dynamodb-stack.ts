@@ -229,6 +229,7 @@ export class DynamoDBStack extends cdk.Stack {
   public readonly routingRulesTable: dynamodb.Table;
   public readonly failoverChainsTable: dynamodb.Table;
   public readonly smartRoutingConfigTable: dynamodb.Table;
+  public readonly providersTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DynamoDBStackProps) {
     super(scope, id, props);
@@ -432,6 +433,22 @@ export class DynamoDBStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
+    // Providers Table (multi-Bedrock-account provider configurations)
+    this.providersTable = new dynamodb.Table(this, 'ProvidersTable', {
+      partitionKey: {
+        name: 'provider_id',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode:
+        config.dynamodbBillingMode === 'PAY_PER_REQUEST'
+          ? dynamodb.BillingMode.PAY_PER_REQUEST
+          : dynamodb.BillingMode.PROVISIONED,
+      readCapacity: config.dynamodbReadCapacity,
+      writeCapacity: config.dynamodbWriteCapacity,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
     // Apply tags to all tables
     Object.entries(config.tags).forEach(([key, value]) => {
       cdk.Tags.of(this.apiKeysTable).add(key, value);
@@ -443,6 +460,7 @@ export class DynamoDBStack extends cdk.Stack {
       cdk.Tags.of(this.routingRulesTable).add(key, value);
       cdk.Tags.of(this.failoverChainsTable).add(key, value);
       cdk.Tags.of(this.smartRoutingConfigTable).add(key, value);
+      cdk.Tags.of(this.providersTable).add(key, value);
     });
 
     // Outputs - exportName omitted to avoid cross-stack conflicts
@@ -489,6 +507,11 @@ export class DynamoDBStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SmartRoutingConfigTableName', {
       value: this.smartRoutingConfigTable.tableName,
       description: 'Smart Routing Config DynamoDB Table Name',
+    });
+
+    new cdk.CfnOutput(this, 'ProvidersTableName', {
+      value: this.providersTable.tableName,
+      description: 'Providers DynamoDB Table Name',
     });
   }
 
