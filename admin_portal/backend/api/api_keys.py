@@ -111,6 +111,28 @@ async def create_api_key(request: ApiKeyCreate):
     """
     api_key_manager, _, _ = get_managers()
 
+    # Validate provider_id references an existing, active provider
+    if request.provider_id:
+        from app.db.provider_manager import ProviderManager
+        from app.core.config import settings
+        db_client = DynamoDBClient()
+        provider_mgr = ProviderManager(
+            dynamodb_resource=db_client.dynamodb,
+            table_name=settings.dynamodb_providers_table,
+            encryption_secret=settings.provider_key_encryption_secret or "",
+        )
+        provider = provider_mgr.get_provider(request.provider_id)
+        if not provider:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Provider '{request.provider_id}' not found",
+            )
+        if not provider.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Provider '{request.provider_id}' is inactive",
+            )
+
     new_key = api_key_manager.create_api_key(
         user_id=request.user_id,
         name=request.name,

@@ -102,9 +102,10 @@ class BedrockService:
         self.anthropic_to_bedrock = AnthropicToBedrockConverter(dynamodb_client)
         self.bedrock_to_anthropic = BedrockToAnthropicConverter()
 
-        # Multi-provider client cache
-        self._provider_clients: Dict[str, Any] = {}
+        # Multi-provider client cache with TTL (5 min)
+        self._provider_clients: Dict[str, Any] = {}  # provider_id → (client, created_time)
         self._provider_clients_lock = threading.Lock()
+        self._provider_client_ttl = 300  # 5 minutes
         self._provider_manager = None  # Lazy-loaded
 
         # Initialize OpenAI-compat service for non-Claude models if enabled
@@ -153,9 +154,16 @@ class BedrockService:
         if not provider_id:
             return self.client
         with self._provider_clients_lock:
-            if provider_id not in self._provider_clients:
-                self._provider_clients[provider_id] = self._create_provider_client(provider_id)
-            return self._provider_clients[provider_id]
+            cached = self._provider_clients.get(provider_id)
+            if cached is not None:
+                client, created_at = cached
+                if time.time() - created_at < self._provider_client_ttl:
+                    return client
+                # TTL expired, remove stale entry
+                del self._provider_clients[provider_id]
+            new_client = self._create_provider_client(provider_id)
+            self._provider_clients[provider_id] = (new_client, time.time())
+            return new_client
 
     def _create_provider_client(self, provider_id: str):
         """Create a boto3 bedrock-runtime client for a specific provider."""

@@ -1,4 +1,6 @@
 """Provider management routes for admin portal."""
+import os
+import threading
 import sys
 from pathlib import Path
 
@@ -17,6 +19,9 @@ from admin_portal.backend.schemas.provider import (
 )
 
 router = APIRouter()
+
+# Lock for thread-safe bearer token env var manipulation in test_provider_connection
+_bearer_token_lock = threading.Lock()
 
 
 def get_provider_manager() -> ProviderManager:
@@ -102,7 +107,6 @@ async def delete_provider(provider_id: str):
 @router.post("/{provider_id}/test")
 async def test_provider_connection(provider_id: str):
     """Test provider connectivity by calling Bedrock ListFoundationModels."""
-    import os
     import boto3
     from botocore.config import Config
 
@@ -119,16 +123,17 @@ async def test_provider_connection(provider_id: str):
 
     try:
         if auth_type == "bearer_token":
-            old_val = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
-            try:
-                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = creds["bearer_token"]
-                client = boto3.client("bedrock", region_name=region, config=config)
-                resp = client.list_foundation_models(byOutputModality="TEXT")
-            finally:
-                if old_val is not None:
-                    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = old_val
-                else:
-                    os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            with _bearer_token_lock:
+                old_val = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+                try:
+                    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = creds["bearer_token"]
+                    client = boto3.client("bedrock", region_name=region, config=config)
+                    resp = client.list_foundation_models(byOutputModality="TEXT")
+                finally:
+                    if old_val is not None:
+                        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = old_val
+                    else:
+                        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
         else:
             client = boto3.client(
                 "bedrock", region_name=region,
