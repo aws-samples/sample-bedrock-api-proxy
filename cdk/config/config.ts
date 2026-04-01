@@ -140,7 +140,7 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
 
     // EC2 Launch Type (used when launchType is 'ec2')
     ec2InstanceType: 't3.medium',  // Will be overridden based on platform
-    ec2UseSpot: true,              // Use Spot for dev to save cost
+    ec2UseSpot: false,             // Disabled: Spot capacity insufficient in us-east-1
     ec2RootVolumeSize: 30,         // 30GB root volume
     ec2EnableDockerSocket: true,   // Enable Docker socket for PTC
 
