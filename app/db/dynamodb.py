@@ -613,6 +613,7 @@ class APIKeyManager:
         cache_ttl: Optional[str] = None,
         routing_strategy: Optional[str] = None,
         compression_strategy: Optional[str] = None,
+        provider_id: Optional[str] = None,
     ) -> bool:
         """
         Update API key fields.
@@ -708,6 +709,10 @@ class APIKeyManager:
         if compression_strategy is not None:
             update_parts.append("compression_strategy = :compression_strategy")
             expression_values[":compression_strategy"] = compression_strategy
+
+        if provider_id is not None:
+            update_parts.append("provider_id = :provider_id")
+            expression_values[":provider_id"] = provider_id
 
         if not update_parts:
             return False
