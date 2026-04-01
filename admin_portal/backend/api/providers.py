@@ -24,6 +24,24 @@ router = APIRouter()
 _bearer_token_lock = threading.Lock()
 
 
+def _count_api_keys_by_provider() -> dict[str, int]:
+    """Scan all API keys (with pagination) and return {provider_id: count}."""
+    db = DynamoDBClient()
+    api_key_mgr = APIKeyManager(db)
+    counts: dict[str, int] = {}
+    last_key = None
+    while True:
+        result = api_key_mgr.list_all_api_keys(limit=1000, last_key=last_key)
+        for k in result.get("items", []):
+            pid = k.get("provider_id")
+            if pid:
+                counts[pid] = counts.get(pid, 0) + 1
+        last_key = result.get("last_key")
+        if not last_key:
+            break
+    return counts
+
+
 def get_provider_manager() -> ProviderManager:
     db = DynamoDBClient()
     return ProviderManager(
@@ -37,8 +55,14 @@ def get_provider_manager() -> ProviderManager:
 async def list_providers():
     mgr = get_provider_manager()
     items = mgr.list_providers()
+    key_counts = _count_api_keys_by_provider()
+
+    providers = []
+    for item in items:
+        providers.append(ProviderResponse(**{**item, "api_key_count": key_counts.get(item["provider_id"], 0)}))
+
     return ProviderListResponse(
-        items=[ProviderResponse(**item) for item in items],
+        items=providers,
         count=len(items),
     )
 
@@ -49,7 +73,9 @@ async def get_provider(provider_id: str):
     item = mgr.get_provider(provider_id)
     if not item:
         raise HTTPException(status_code=404, detail="Provider not found")
-    return ProviderResponse(**item)
+
+    key_counts = _count_api_keys_by_provider()
+    return ProviderResponse(**{**item, "api_key_count": key_counts.get(provider_id, 0)})
 
 
 @router.post("", response_model=ProviderResponse, status_code=status.HTTP_201_CREATED)
@@ -88,17 +114,12 @@ async def delete_provider(provider_id: str):
         raise HTTPException(status_code=404, detail="Provider not found")
 
     # Check if any API keys reference this provider
-    db = DynamoDBClient()
-    api_key_mgr = APIKeyManager(db)
-    all_keys = api_key_mgr.list_all_api_keys(limit=1000)
-    referencing = [
-        k for k in all_keys.get("items", [])
-        if k.get("provider_id") == provider_id
-    ]
-    if referencing:
+    key_counts = _count_api_keys_by_provider()
+    ref_count = key_counts.get(provider_id, 0)
+    if ref_count:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot delete: {len(referencing)} API key(s) reference this provider",
+            detail=f"Cannot delete: {ref_count} API key(s) reference this provider",
         )
 
     mgr.delete_provider(provider_id)

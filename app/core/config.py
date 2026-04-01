@@ -127,6 +127,11 @@ class Settings(BaseSettings):
         default=None, alias="DEFAULT_CACHE_TTL"
     )  # "5m" or "1h", None = don't inject TTL (use Anthropic default)
 
+    # Strip unsupported 'scope' field from cache_control (Bedrock doesn't support it)
+    strip_cache_scope: bool = Field(
+        default=True, alias="STRIP_CACHE_SCOPE"
+    )
+
     # Model Mapping
     default_model_mapping: Dict[str, str] = Field(
         default={

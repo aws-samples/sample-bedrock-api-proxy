@@ -73,6 +73,7 @@ export interface EnvironmentConfig {
 
   // Cache TTL Configuration
   defaultCacheTtl?: string;                // Proxy-level default cache TTL ('5m' or '1h')
+  stripCacheScope?: boolean;               // Strip unsupported 'scope' from cache_control (default: true)
 
   // Bedrock Concurrency Settings
   bedrockThreadPoolSize: number;
@@ -439,5 +440,6 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ...(process.env.WEB_FETCH_DEFAULT_MAX_USES && { webFetchDefaultMaxUses: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_USES) }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS && { webFetchDefaultMaxContentTokens: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS) }),
     ...(process.env.DEFAULT_CACHE_TTL && { defaultCacheTtl: process.env.DEFAULT_CACHE_TTL }),
+    ...(process.env.STRIP_CACHE_SCOPE && { stripCacheScope: process.env.STRIP_CACHE_SCOPE.toLowerCase() === 'true' }),
   };
 }

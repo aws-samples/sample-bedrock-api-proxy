@@ -275,6 +275,7 @@ export class ECSStack extends cdk.Stack {
 
       // Cache TTL
       ...(config.defaultCacheTtl && { DEFAULT_CACHE_TTL: config.defaultCacheTtl }),
+      ...(config.stripCacheScope !== undefined && { STRIP_CACHE_SCOPE: config.stripCacheScope.toString() }),
 
       // OpenAI-Compatible API (Bedrock Mantle)
       ENABLE_OPENAI_COMPAT: config.enableOpenaiCompat.toString(),

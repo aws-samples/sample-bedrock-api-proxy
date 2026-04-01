@@ -579,6 +579,33 @@ class BedrockService:
             if isinstance(tool, dict):
                 _update_block(tool)
 
+    def _strip_cache_scope(self, body: dict) -> None:
+        """Remove 'scope' from all cache_control blocks. Bedrock doesn't support it."""
+        if not settings.strip_cache_scope:
+            return
+
+        def _strip(block: dict) -> None:
+            cc = block.get("cache_control")
+            if isinstance(cc, dict) and "scope" in cc:
+                del cc["scope"]
+
+        system = body.get("system")
+        if isinstance(system, list):
+            for part in system:
+                if isinstance(part, dict):
+                    _strip(part)
+
+        for msg in body.get("messages", []):
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        _strip(block)
+
+        for tool in body.get("tools", []):
+            if isinstance(tool, dict):
+                _strip(tool)
+
     async def invoke_model(
         self, request: MessageRequest, request_id: Optional[str] = None,
         service_tier: Optional[str] = None, anthropic_beta: Optional[str] = None,
@@ -812,6 +839,7 @@ class BedrockService:
 
         # Apply cache TTL with priority: API key > client > proxy default
         self._apply_cache_ttl(native_request, api_key_cache_ttl=cache_ttl)
+        self._strip_cache_scope(native_request)
 
         print(f"[BEDROCK NATIVE] InvokeModel request for {request_id}:")
         print(f"  - Model ID: {bedrock_model_id}")
@@ -1023,6 +1051,7 @@ class BedrockService:
 
                 # Apply cache TTL with priority: API key > client > proxy default
                 self._apply_cache_ttl(native_request, api_key_cache_ttl=cache_ttl)
+                self._strip_cache_scope(native_request)
 
                 print(f"[BEDROCK STREAM NATIVE] Request params:")
                 print(f"  - Model ID: {bedrock_model_id}")
