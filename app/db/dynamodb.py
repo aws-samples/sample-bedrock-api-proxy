@@ -40,6 +40,7 @@ class DynamoDBClient:
         self.routing_rules_table_name = settings.dynamodb_routing_rules_table
         self.failover_chains_table_name = settings.dynamodb_failover_chains_table
         self.smart_routing_config_table_name = settings.dynamodb_smart_routing_config_table
+        self.providers_table_name = settings.dynamodb_providers_table
 
     def create_tables(self):
         """Create all required DynamoDB tables if they don't exist."""
@@ -52,6 +53,7 @@ class DynamoDBClient:
         self._create_routing_rules_table()
         self._create_failover_chains_table()
         self._create_smart_routing_config_table()
+        self._create_providers_table()
 
     def _create_api_keys_table(self):
         """Create API keys table."""
@@ -287,6 +289,27 @@ class DynamoDBClient:
             else:
                 raise
 
+    def _create_providers_table(self):
+        """Create providers table for multi-Bedrock-account support."""
+        try:
+            table = self.dynamodb.create_table(
+                TableName=self.providers_table_name,
+                KeySchema=[
+                    {"AttributeName": "provider_id", "KeyType": "HASH"},
+                ],
+                AttributeDefinitions=[
+                    {"AttributeName": "provider_id", "AttributeType": "S"},
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            table.wait_until_exists()
+            print(f"Created table: {self.providers_table_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceInUseException":
+                print(f"Table already exists: {self.providers_table_name}")
+            else:
+                raise
+
 
 class APIKeyManager:
     """Manager for API key operations."""
@@ -310,6 +333,7 @@ class APIKeyManager:
         cache_ttl: Optional[str] = None,
         routing_strategy: Optional[str] = None,
         compression_strategy: Optional[str] = None,
+        provider_id: Optional[str] = None,
     ) -> str:
         """
         Create a new API key.
@@ -358,6 +382,7 @@ class APIKeyManager:
             "cache_ttl": cache_ttl,
             "routing_strategy": routing_strategy or "off",
             "compression_strategy": compression_strategy or "off",
+            "provider_id": provider_id,
         }
 
         self.table.put_item(Item=item)
@@ -588,6 +613,7 @@ class APIKeyManager:
         cache_ttl: Optional[str] = None,
         routing_strategy: Optional[str] = None,
         compression_strategy: Optional[str] = None,
+        provider_id: Optional[str] = None,
     ) -> bool:
         """
         Update API key fields.
@@ -683,6 +709,10 @@ class APIKeyManager:
         if compression_strategy is not None:
             update_parts.append("compression_strategy = :compression_strategy")
             expression_values[":compression_strategy"] = compression_strategy
+
+        if provider_id is not None:
+            update_parts.append("provider_id = :provider_id")
+            expression_values[":provider_id"] = provider_id
 
         if not update_parts:
             return False

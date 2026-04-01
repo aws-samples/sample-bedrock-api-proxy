@@ -294,6 +294,9 @@ async def create_message(
     """
     request_id = f"msg-{uuid4().hex}"
 
+    # Extract provider_id from API key info for multi-provider Bedrock routing
+    provider_id = api_key_info.get("provider_id") if api_key_info else None
+
     # Get container ID from request body for session reuse (plain string)
     container_id = request_data.container
 
@@ -985,7 +988,7 @@ async def create_message(
         else:
             # Handle non-streaming request (async to not block event loop)
             response = await bedrock_service.invoke_model(
-                request_data, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl
+                request_data, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id
             )
 
             if _trace_span is not None:
@@ -1283,6 +1286,7 @@ async def _handle_streaming_request(
     accumulated_tokens = {"input": 0, "output": 0, "cached": 0, "cache_write": 0}
     success = True
     error_message = None
+    provider_id = api_key_info.get("provider_id") if api_key_info else None
 
     print(f"[STREAMING] Starting stream for request {request_id}")
     print(f"[STREAMING] Service tier: {service_tier}")
@@ -1290,7 +1294,7 @@ async def _handle_streaming_request(
     try:
         # Stream events from Bedrock (with beta header mapping)
         async for sse_event in bedrock_service.invoke_model_stream(
-            request_data, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl
+            request_data, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id
         ):
             # Parse event to track usage from message_delta and message_start events
             # SSE format: "event: <type>\ndata: <json>\n\n"
@@ -1420,9 +1424,10 @@ async def count_tokens(
     Raises:
         HTTPException: For various error conditions
     """
+    provider_id = api_key_info.get("provider_id") if api_key_info else None
     try:
         # Count tokens using the Bedrock service (async to not block event loop)
-        token_count = await bedrock_service.count_tokens(request_data)
+        token_count = await bedrock_service.count_tokens(request_data, provider_id=provider_id)
 
         return CountTokensResponse(input_tokens=token_count)
 

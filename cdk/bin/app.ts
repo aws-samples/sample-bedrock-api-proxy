@@ -69,6 +69,7 @@ const ecsStack = new ECSStack(app, `${stackPrefix}-ECS`, {
   routingRulesTable: dynamoDBStack.routingRulesTable,
   failoverChainsTable: dynamoDBStack.failoverChainsTable,
   smartRoutingConfigTable: dynamoDBStack.smartRoutingConfigTable,
+  providersTable: dynamoDBStack.providersTable,
   // Cognito (for admin portal)
   cognitoUserPoolId: cognitoStack?.userPool.userPoolId,
   cognitoClientId: cognitoStack?.userPoolClient.userPoolClientId,

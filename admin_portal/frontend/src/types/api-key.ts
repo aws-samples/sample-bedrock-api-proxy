@@ -17,6 +17,7 @@ export interface ApiKey {
   cache_ttl?: string | null;  // Per-key cache TTL override ("5m", "1h", or null)
   routing_strategy?: string;  // cost/quality/auto/off
   compression_strategy?: string;  // aggressive/moderate/conservative/off
+  provider_id?: string | null;
   created_at: number;
   updated_at?: number;
   // Usage stats (aggregated from usage_stats table)
@@ -38,6 +39,7 @@ export interface ApiKeyCreate {
   cache_ttl?: string | null;
   routing_strategy?: string;
   compression_strategy?: string;
+  provider_id?: string | null;
 }
 
 export interface ApiKeyUpdate {
@@ -51,6 +53,7 @@ export interface ApiKeyUpdate {
   cache_ttl?: string | null;
   routing_strategy?: string;
   compression_strategy?: string;
+  provider_id?: string | null;
 }
 
 export interface ApiKeyListResponse {

@@ -19,6 +19,7 @@ export default function Sidebar() {
     { path: '/api-keys', icon: 'vpn_key', label: t('nav.apiKeys'), section: 'main' },
     { path: '/pricing', icon: 'payments', label: t('nav.pricing'), section: 'config' },
     { path: '/model-mapping', icon: 'swap_horiz', label: t('nav.modelMapping'), section: 'config' },
+    { path: '/providers', icon: 'cloud', label: 'Providers', section: 'config' },
     { path: '/provider-keys', icon: 'key', label: 'Provider Keys', section: 'gateway' },
     { path: '/routing', icon: 'alt_route', label: 'Routing', section: 'gateway' },
     { path: '/failover', icon: 'sync_alt', label: 'Failover', section: 'gateway' },

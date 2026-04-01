@@ -85,10 +85,11 @@ async def lifespan(app: FastAPI):
     # Store DynamoDB client in app state
     app.state.dynamodb_client = dynamodb_client
 
-    # Create tables if they don't exist (optional, for development)
-    if settings.environment == "development":
+    # Create tables if they don't exist (local development only)
+    # Skip when running on ECS (tables are created by CDK)
+    if settings.environment == "development" and settings.dynamodb_endpoint_url:
         try:
-            print("Creating DynamoDB tables (if not exist)...")
+            print("Creating DynamoDB tables (local dev)...")
             dynamodb_client.create_tables()
         except Exception as e:
             print(f"Warning: Failed to create DynamoDB tables: {e}")

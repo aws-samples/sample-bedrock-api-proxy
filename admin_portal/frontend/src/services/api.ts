@@ -31,6 +31,11 @@ import type {
   FailoverChain,
   FailoverChainCreate,
   FailoverChainUpdate,
+  Provider,
+  ProviderCreate,
+  ProviderUpdate,
+  ProviderListResponse,
+  ProviderTestResult,
 } from '../types';
 
 const API_BASE_URL = '/api';
@@ -345,6 +350,43 @@ export const providerKeysApi = {
   delete: async (keyId: string): Promise<void> => {
     await apiFetch(`/provider-keys/${encodeURIComponent(keyId)}`, {
       method: 'DELETE',
+    });
+  },
+};
+
+// Providers API (Bedrock Account Providers)
+export const providersApi = {
+  list: async (): Promise<ProviderListResponse> => {
+    return apiFetch('/providers');
+  },
+
+  get: async (providerId: string): Promise<Provider> => {
+    return apiFetch(`/providers/${encodeURIComponent(providerId)}`);
+  },
+
+  create: async (data: ProviderCreate): Promise<Provider> => {
+    return apiFetch('/providers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  update: async (providerId: string, data: ProviderUpdate): Promise<Provider> => {
+    return apiFetch(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  delete: async (providerId: string): Promise<void> => {
+    await apiFetch(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  test: async (providerId: string): Promise<ProviderTestResult> => {
+    return apiFetch(`/providers/${encodeURIComponent(providerId)}/test`, {
+      method: 'POST',
     });
   },
 };

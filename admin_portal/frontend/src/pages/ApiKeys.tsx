@@ -8,6 +8,7 @@ import {
   useReactivateApiKey,
   useDeleteApiKey,
   useDashboardStats,
+  useProviders,
 } from '../hooks';
 import type { ApiKey, ApiKeyCreate, ApiKeyUpdate } from '../types';
 import { formatTokens } from '../utils';
@@ -61,6 +62,7 @@ function ApiKeyForm({
 }) {
   const { t } = useTranslation();
   const isEdit = !!initialData;
+  const { data: providersData } = useProviders();
 
   const [formData, setFormData] = useState({
     user_id: initialData?.user_id || '',
@@ -73,11 +75,16 @@ function ApiKeyForm({
     cache_ttl: initialData?.cache_ttl || '',
     routing_strategy: initialData?.routing_strategy || 'off',
     compression_strategy: initialData?.compression_strategy || 'off',
+    provider_id: initialData?.provider_id || '',
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    const submitData = {
+      ...formData,
+      provider_id: formData.provider_id || null,
+    };
+    onSubmit(submitData);
   };
 
   return (
@@ -195,39 +202,28 @@ function ApiKeyForm({
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">
-            Routing Strategy
-          </label>
-          <select
-            value={formData.routing_strategy}
-            onChange={(e) => setFormData({ ...formData, routing_strategy: e.target.value })}
-            className="w-full px-3 py-2 bg-input-bg border border-border-dark rounded-lg text-white focus:border-primary focus:ring-1 focus:ring-primary"
-          >
-            <option value="off">Off</option>
-            <option value="cost">Cost (cheapest model)</option>
-            <option value="quality">Quality (best model)</option>
-            <option value="auto">Auto (smart routing)</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">
-            Compression Strategy
-          </label>
-          <select
-            value={formData.compression_strategy}
-            onChange={(e) => setFormData({ ...formData, compression_strategy: e.target.value })}
-            className="w-full px-3 py-2 bg-input-bg border border-border-dark rounded-lg text-white focus:border-primary focus:ring-1 focus:ring-primary"
-          >
-            <option value="off">Off (no compression)</option>
-            <option value="conservative">Conservative (tool truncation only)</option>
-            <option value="moderate">Moderate (truncation + folding)</option>
-            <option value="aggressive">Aggressive (truncation + folding)</option>
-          </select>
-        </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1">Provider</label>
+        <select
+          value={formData.provider_id}
+          onChange={(e) => setFormData({ ...formData, provider_id: e.target.value })}
+          className="w-full px-3 py-2 bg-input-bg border border-border-dark rounded-lg text-white focus:border-primary focus:ring-1 focus:ring-primary"
+        >
+          <option value="">Default (Environment Config)</option>
+          {providersData?.items
+            ?.filter((p) => p.is_active)
+            .map((p) => (
+              <option key={p.provider_id} value={p.provider_id}>
+                {p.name} ({p.aws_region})
+              </option>
+            ))}
+        </select>
+        <p className="mt-1 text-xs text-slate-500">
+          Select a Bedrock provider account for this API key, or use the default environment config.
+        </p>
       </div>
+
+      {/* TODO: Routing Strategy and Compression Strategy hidden — re-enable after optimization */}
 
       <div className="flex gap-3 mt-4">
         <button
@@ -263,6 +259,7 @@ export default function ApiKeys() {
   });
 
   const { data: stats } = useDashboardStats();
+  const { data: providersData } = useProviders();
   const createMutation = useCreateApiKey();
   const updateMutation = useUpdateApiKey();
   const deactivateMutation = useDeactivateApiKey();
@@ -605,6 +602,9 @@ export default function ApiKeys() {
                 <th className="px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider hidden lg:table-cell">
                   {t('apiKeys.form.cacheTtl')}
                 </th>
+                <th className="px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider hidden lg:table-cell">
+                  Provider
+                </th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   {t('common.status')}
                 </th>
@@ -616,7 +616,7 @@ export default function ApiKeys() {
             <tbody className="divide-y divide-border-dark">
               {isLoading ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center">
+                  <td colSpan={11} className="px-6 py-12 text-center">
                     <span className="material-symbols-outlined animate-spin text-4xl text-primary">
                       progress_activity
                     </span>
@@ -624,7 +624,7 @@ export default function ApiKeys() {
                 </tr>
               ) : data?.items.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={11} className="px-6 py-12 text-center text-slate-400">
                     No API keys found
                   </td>
                 </tr>
@@ -806,6 +806,15 @@ export default function ApiKeys() {
                             ? t(`apiKeys.cacheTtlOptions.${key.cache_ttl}`)
                             : t('apiKeys.cacheTtlOptions.default')}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap hidden lg:table-cell">
+                        {key.provider_id ? (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-violet-900/30 text-violet-400 border border-violet-800">
+                            {providersData?.items.find(p => p.provider_id === key.provider_id)?.name || key.provider_id}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">Default</span>
+                        )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span

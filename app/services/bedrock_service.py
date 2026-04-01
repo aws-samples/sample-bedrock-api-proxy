@@ -102,6 +102,12 @@ class BedrockService:
         self.anthropic_to_bedrock = AnthropicToBedrockConverter(dynamodb_client)
         self.bedrock_to_anthropic = BedrockToAnthropicConverter()
 
+        # Multi-provider client cache with TTL (5 min)
+        self._provider_clients: Dict[str, Any] = {}  # provider_id → (client, created_time)
+        self._provider_clients_lock = threading.Lock()
+        self._provider_client_ttl = 300  # 5 minutes
+        self._provider_manager = None  # Lazy-loaded
+
         # Initialize OpenAI-compat service for non-Claude models if enabled
         self._openai_compat_service = None
         if settings.enable_openai_compat and settings.openai_api_key and settings.openai_base_url:
@@ -124,6 +130,95 @@ class BedrockService:
         """
         model_lower = model_id.lower()
         return "anthropic" in model_lower or "claude" in model_lower
+
+    def _get_provider_manager(self):
+        """Lazy-load ProviderManager."""
+        if self._provider_manager is None:
+            from app.db.provider_manager import ProviderManager
+            self._provider_manager = ProviderManager(
+                dynamodb_resource=self.dynamodb_client.dynamodb,
+                table_name=settings.dynamodb_providers_table,
+                encryption_secret=settings.provider_key_encryption_secret or "",
+            )
+        return self._provider_manager
+
+    def get_client(self, provider_id: Optional[str] = None):
+        """Get boto3 bedrock-runtime client for a provider.
+
+        Args:
+            provider_id: Provider ID, or None for default client.
+
+        Returns:
+            boto3 bedrock-runtime client
+        """
+        if not provider_id:
+            return self.client
+        with self._provider_clients_lock:
+            cached = self._provider_clients.get(provider_id)
+            if cached is not None:
+                client, created_at = cached
+                if time.time() - created_at < self._provider_client_ttl:
+                    return client
+                # TTL expired, remove stale entry
+                del self._provider_clients[provider_id]
+            new_client = self._create_provider_client(provider_id)
+            self._provider_clients[provider_id] = (new_client, time.time())
+            return new_client
+
+    def _create_provider_client(self, provider_id: str):
+        """Create a boto3 bedrock-runtime client for a specific provider."""
+        import os
+        mgr = self._get_provider_manager()
+        provider = mgr.get_provider(provider_id)
+        if not provider or not provider.get("is_active", False):
+            raise ValueError(f"Provider {provider_id} not found or inactive")
+
+        creds = mgr.get_decrypted_credentials(provider_id)
+        region = provider.get("aws_region", settings.aws_region)
+        endpoint_url = provider.get("endpoint_url")
+
+        config = Config(
+            read_timeout=settings.bedrock_timeout,
+            connect_timeout=30,
+            retries={"max_attempts": 3, "mode": "standard"},
+        )
+
+        auth_type = provider.get("auth_type", "ak_sk")
+
+        if auth_type == "ak_sk":
+            return boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                endpoint_url=endpoint_url,
+                aws_access_key_id=creds.get("access_key_id"),
+                aws_secret_access_key=creds.get("secret_access_key"),
+                aws_session_token=creds.get("session_token"),
+                config=config,
+            )
+        elif auth_type == "bearer_token":
+            # Bearer token: set env var, create client, then restore
+            # Thread-safe via _provider_clients_lock (already held by caller)
+            old_val = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            try:
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = creds["bearer_token"]
+                return boto3.client(
+                    "bedrock-runtime",
+                    region_name=region,
+                    endpoint_url=endpoint_url,
+                    config=config,
+                )
+            finally:
+                if old_val is not None:
+                    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = old_val
+                else:
+                    os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+
+        raise ValueError(f"Unknown auth_type: {auth_type}")
+
+    def invalidate_provider_client(self, provider_id: str):
+        """Remove a cached provider client (call when provider is updated/deleted)."""
+        with self._provider_clients_lock:
+            self._provider_clients.pop(provider_id, None)
 
     def _get_bedrock_model_id(self, anthropic_model_id: str) -> str:
         """
@@ -487,7 +582,7 @@ class BedrockService:
     async def invoke_model(
         self, request: MessageRequest, request_id: Optional[str] = None,
         service_tier: Optional[str] = None, anthropic_beta: Optional[str] = None,
-        cache_ttl: Optional[str] = None
+        cache_ttl: Optional[str] = None, provider_id: Optional[str] = None
     ) -> MessageResponse:
         """
         Invoke Bedrock model (non-streaming) asynchronously.
@@ -531,13 +626,15 @@ class BedrockService:
                 service_tier,
                 anthropic_beta,
                 _otel_ctx,
-                cache_ttl
+                cache_ttl,
+                provider_id
             )
 
     def _invoke_model_sync(
         self, request: MessageRequest, request_id: Optional[str] = None,
         service_tier: Optional[str] = None, anthropic_beta: Optional[str] = None,
-        otel_ctx=None, cache_ttl: Optional[str] = None
+        otel_ctx=None, cache_ttl: Optional[str] = None,
+        provider_id: Optional[str] = None
     ) -> MessageResponse:
         """
         Synchronous Bedrock model invocation (runs in thread pool).
@@ -564,7 +661,7 @@ class BedrockService:
             _otel_token = attach_context_in_thread(otel_ctx)
 
         try:
-            return self._invoke_model_sync_inner(request, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl)
+            return self._invoke_model_sync_inner(request, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id)
         finally:
             if _otel_token is not None:
                 from app.tracing.context import detach_context_in_thread
@@ -573,13 +670,13 @@ class BedrockService:
     def _invoke_model_sync_inner(
         self, request: MessageRequest, request_id: Optional[str] = None,
         service_tier: Optional[str] = None, anthropic_beta: Optional[str] = None,
-        cache_ttl: Optional[str] = None
+        cache_ttl: Optional[str] = None, provider_id: Optional[str] = None
     ) -> MessageResponse:
         """Inner sync invocation after OTEL context is attached."""
         # Route Claude models to InvokeModel API for better feature support
         if self._is_claude_model(request.model):
             print(f"[BEDROCK] Using InvokeModel API for Claude model: {request.model}")
-            return self._invoke_model_native_sync(request, request_id, anthropic_beta, cache_ttl=cache_ttl)
+            return self._invoke_model_native_sync(request, request_id, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id)
 
         # Route to OpenAI-compat service if enabled
         if self._openai_compat_service:
@@ -610,7 +707,7 @@ class BedrockService:
             print(f"[BEDROCK] Calling Bedrock Converse API...")
 
             # Call Bedrock Converse API
-            response = self.client.converse(**bedrock_request)
+            response = self.get_client(provider_id).converse(**bedrock_request)
 
             print(f"[BEDROCK] Received response from Bedrock")
             print(f"  - Stop reason: {response.get('stopReason')}")
@@ -646,7 +743,7 @@ class BedrockService:
                 # Remove serviceTier and retry
                 bedrock_request.pop("serviceTier", None)
                 try:
-                    response = self.client.converse(**bedrock_request)
+                    response = self.get_client(provider_id).converse(**bedrock_request)
                     print(f"[BEDROCK] Retry with default tier succeeded")
                     print(f"  - Stop reason: {response.get('stopReason')}")
                     print(f"  - Usage: {response.get('usage')}")
@@ -686,7 +783,8 @@ class BedrockService:
 
     def _invoke_model_native_sync(
         self, request: MessageRequest, request_id: Optional[str] = None,
-        anthropic_beta: Optional[str] = None, cache_ttl: Optional[str] = None
+        anthropic_beta: Optional[str] = None, cache_ttl: Optional[str] = None,
+        provider_id: Optional[str] = None
     ) -> MessageResponse:
         """
         Invoke Bedrock InvokeModel API for Claude models (native Anthropic format).
@@ -739,7 +837,7 @@ class BedrockService:
             print(f"[BEDROCK NATIVE] Calling InvokeModel API...")
 
             # Call InvokeModel API with native Anthropic format
-            response = self.client.invoke_model(
+            response = self.get_client(provider_id).invoke_model(
                 modelId=bedrock_model_id,
                 contentType="application/json",
                 accept="application/json",
@@ -866,7 +964,7 @@ class BedrockService:
     async def invoke_model_stream(
         self, request: MessageRequest, request_id: Optional[str] = None,
         service_tier: Optional[str] = None, anthropic_beta: Optional[str] = None,
-        cache_ttl: Optional[str] = None
+        cache_ttl: Optional[str] = None, provider_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
         Invoke Bedrock model with streaming (Server-Sent Events format).
@@ -944,7 +1042,8 @@ class BedrockService:
                     request,
                     message_id,
                     event_queue,
-                    _otel_ctx
+                    _otel_ctx,
+                    provider_id
                 )
             else:
                 print(f"[BEDROCK STREAM] Converting request to Bedrock format for request {request_id}")
@@ -973,7 +1072,8 @@ class BedrockService:
                     message_id,
                     effective_service_tier,
                     event_queue,
-                    _otel_ctx
+                    _otel_ctx,
+                    provider_id
                 )
 
             # Consume events from queue asynchronously
@@ -1059,7 +1159,8 @@ class BedrockService:
         message_id: str,
         effective_service_tier: str,
         event_queue: queue.Queue,
-        otel_ctx=None
+        otel_ctx=None,
+        provider_id: Optional[str] = None
     ) -> None:
         """
         Worker function that runs in thread pool to handle streaming.
@@ -1094,7 +1195,7 @@ class BedrockService:
             print(f"[BEDROCK STREAM WORKER] Calling Bedrock ConverseStream API...")
 
             # Call Bedrock ConverseStream API
-            response = self.client.converse_stream(**bedrock_request)
+            response = self.get_client(provider_id).converse_stream(**bedrock_request)
 
             stream = response.get("stream")
             if not stream:
@@ -1141,7 +1242,7 @@ class BedrockService:
                 bedrock_request.pop("serviceTier", None)
 
                 try:
-                    response = self.client.converse_stream(**bedrock_request)
+                    response = self.get_client(provider_id).converse_stream(**bedrock_request)
                     stream = response.get("stream")
                     if stream:
                         for bedrock_event in stream:
@@ -1181,7 +1282,8 @@ class BedrockService:
         _request: MessageRequest,  # Kept for potential future use
         _message_id: str,  # Kept for potential future use
         event_queue: queue.Queue,
-        otel_ctx=None
+        otel_ctx=None,
+        provider_id: Optional[str] = None
     ) -> None:
         """
         Worker function for InvokeModelWithResponseStream (native Anthropic format).
@@ -1207,7 +1309,7 @@ class BedrockService:
             print(f"[BEDROCK STREAM NATIVE] Calling InvokeModelWithResponseStream API...")
 
             # Call InvokeModelWithResponseStream API
-            response = self.client.invoke_model_with_response_stream(
+            response = self.get_client(provider_id).invoke_model_with_response_stream(
                 modelId=bedrock_model_id,
                 contentType="application/json",
                 accept="application/json",
@@ -1459,7 +1561,7 @@ class BedrockService:
         except Exception as e:
             raise Exception(f"Failed to get model info: {str(e)}")
 
-    async def count_tokens(self, request: CountTokensRequest) -> int:
+    async def count_tokens(self, request: CountTokensRequest, provider_id: Optional[str] = None) -> int:
         """
         Count tokens in a request asynchronously.
 
@@ -1493,7 +1595,8 @@ class BedrockService:
                 return await loop.run_in_executor(
                     executor,
                     self._count_tokens_sync,
-                    request
+                    request,
+                    provider_id
                 )
             except Exception as e:
                 # If Bedrock API fails, fall back to estimation
@@ -1502,7 +1605,7 @@ class BedrockService:
         # Fallback: Estimate token count for non-Claude models or if API fails
         return self._estimate_token_count(request)
 
-    def _count_tokens_sync(self, request: CountTokensRequest) -> int:
+    def _count_tokens_sync(self, request: CountTokensRequest, provider_id: Optional[str] = None) -> int:
         """
         Synchronous count tokens implementation (runs in thread pool).
 
@@ -1540,7 +1643,7 @@ class BedrockService:
             count_tokens_input["converse"]["toolConfig"] = bedrock_request["toolConfig"]
 
         # Call count_tokens API
-        response = self.client.count_tokens(
+        response = self.get_client(provider_id).count_tokens(
             modelId=bedrock_request["modelId"],
             input=count_tokens_input
         )
