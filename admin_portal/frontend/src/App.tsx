@@ -5,6 +5,7 @@ import Providers from './pages/Providers';
 import ProviderKeys from './pages/ProviderKeys';
 import RoutingConfig from './pages/RoutingConfig';
 import FailoverConfig from './pages/FailoverConfig';
+import BetaHeaders from './pages/BetaHeaders';
 import { useAuth } from './hooks';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/api-keys" element={<ApiKeys />} />
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/model-mapping" element={<ModelMapping />} />
+        <Route path="/beta-headers" element={<BetaHeaders />} />
         <Route path="/providers" element={<Providers />} />
         <Route path="/provider-keys" element={<ProviderKeys />} />
         <Route path="/routing" element={<RoutingConfig />} />

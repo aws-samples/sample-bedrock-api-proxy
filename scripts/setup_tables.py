@@ -33,6 +33,7 @@ def main():
     print(f"  - {dynamodb_client.model_mapping_table_name}")
     print(f"  - {dynamodb_client.model_pricing_table_name}")
     print(f"  - {dynamodb_client.providers_table_name}")
+    print(f"  - {dynamodb_client.beta_headers_table_name}")
 
 
 if __name__ == "__main__":

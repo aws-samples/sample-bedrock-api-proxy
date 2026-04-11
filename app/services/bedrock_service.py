@@ -516,28 +516,26 @@ class BedrockService:
                     print(f"[BEDROCK NATIVE] Auto-injected {TOOL_SEARCH_BETA} beta header: defer_loading detected but beta header missing")
 
         # Add beta headers from client
-        # Some headers are mapped (Anthropic → Bedrock), others pass through directly
+        # Rules loaded from DynamoDB (blocklist → filter, mapping → translate, else → passthrough)
         bedrock_beta = []
 
         if anthropic_beta:
-            beta_values = [b.strip() for b in anthropic_beta.split(",")]
+            from app.db.beta_header_cache import BetaHeaderConfigCache
+            cache = BetaHeaderConfigCache.instance()
+            blocklist = cache.get_blocklist()
+            mapping = cache.get_mapping()
+
+            beta_values = [b.strip() for b in anthropic_beta.split(",") if b.strip()]
             for beta_value in beta_values:
-                if beta_value in settings.beta_header_mapping:
-                    # Map Anthropic beta headers to Bedrock beta headers
-                    mapped = settings.beta_header_mapping[beta_value]
+                if beta_value in blocklist:
+                    print(f"[BEDROCK NATIVE] Filtering out unsupported beta header: {beta_value}")
+                elif beta_value in mapping:
+                    mapped = mapping[beta_value]
                     bedrock_beta.extend(mapped)
                     print(f"[BEDROCK NATIVE] Mapped beta header '{beta_value}' → {mapped}")
-                elif beta_value in settings.beta_headers_passthrough:
-                    # Pass through directly without mapping
+                else:
                     bedrock_beta.append(beta_value)
                     print(f"[BEDROCK NATIVE] Passing through beta header: {beta_value}")
-                elif beta_value in settings.beta_headers_blocklist:
-                    # Filter out blocked headers (not supported by Bedrock)
-                    print(f"[BEDROCK NATIVE] Filtering out unsupported beta header: {beta_value}")
-                else:
-                    # Unknown beta header - pass through as-is (may or may not work)
-                    bedrock_beta.append(beta_value)
-                    print(f"[BEDROCK NATIVE] Unknown beta header, passing through: {beta_value}")
 
         if bedrock_beta:
             native_request["anthropic_beta"] = bedrock_beta
