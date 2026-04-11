@@ -138,27 +138,26 @@ class AnthropicToBedrockConverter:
                     additional_fields.update(thinking_config)
 
         # Add anthropic_beta features for Claude models (from client-provided headers)
+        # Rules loaded from DynamoDB (blocklist → filter, mapping → translate, else → passthrough)
         if self._is_claude_model() and anthropic_beta:
+            from app.db.beta_header_cache import BetaHeaderConfigCache
+            cache = BetaHeaderConfigCache.instance()
+            blocklist = cache.get_blocklist()
+            mapping = cache.get_mapping()
+
             bedrock_beta = []
-            beta_values = [b.strip() for b in anthropic_beta.split(",")]
+            beta_values = [b.strip() for b in anthropic_beta.split(",") if b.strip()]
 
             for beta_value in beta_values:
-                if beta_value in settings.beta_header_mapping and self._supports_beta_header_mapping(request.model):
-                    # Map Anthropic beta headers to Bedrock beta headers
-                    mapped = settings.beta_header_mapping[beta_value]
+                if beta_value in blocklist:
+                    print(f"[CONVERTER] Filtering out unsupported beta header: {beta_value}")
+                elif beta_value in mapping and self._supports_beta_header_mapping(request.model):
+                    mapped = mapping[beta_value]
                     bedrock_beta.extend(mapped)
                     print(f"[CONVERTER] Mapped beta header '{beta_value}' → {mapped}")
-                elif beta_value in settings.beta_headers_passthrough:
-                    # Pass through directly without mapping
+                else:
                     bedrock_beta.append(beta_value)
                     print(f"[CONVERTER] Passing through beta header: {beta_value}")
-                elif beta_value in settings.beta_headers_blocklist:
-                    # Filter out blocked headers (not supported by Bedrock)
-                    print(f"[CONVERTER] Filtering out unsupported beta header: {beta_value}")
-                else:
-                    # Unknown beta header - pass through as-is
-                    bedrock_beta.append(beta_value)
-                    print(f"[CONVERTER] Unknown beta header, passing through: {beta_value}")
 
             if bedrock_beta:
                 additional_fields["anthropic_beta"] = bedrock_beta
@@ -270,35 +269,6 @@ class AnthropicToBedrockConverter:
             original_model_id in supported_models or
             self._resolved_model_id in supported_models
         )
-
-    def _map_beta_headers(self, anthropic_beta: str) -> List[str]:
-        """
-        Map Anthropic beta headers to Bedrock beta headers.
-
-        Args:
-            anthropic_beta: Comma-separated Anthropic beta header values
-
-        Returns:
-            List of mapped Bedrock beta headers
-        """
-        if not anthropic_beta:
-            return []
-
-        # Split comma-separated beta values
-        beta_values = [b.strip() for b in anthropic_beta.split(",")]
-        mapped_headers = []
-
-        for beta_value in beta_values:
-            if beta_value in settings.beta_header_mapping:
-                # Map to Bedrock beta headers
-                mapped = settings.beta_header_mapping[beta_value]
-                mapped_headers.extend(mapped)
-                print(f"[CONVERTER] Mapped beta header '{beta_value}' → {mapped}")
-            else:
-                # Keep unmapped beta values as-is (they might be passthrough)
-                print(f"[CONVERTER] Beta header '{beta_value}' has no mapping, skipping")
-
-        return mapped_headers
 
     def _get_tools_with_examples(self, tools: List[Any]) -> List[Dict[str, Any]]:
         """

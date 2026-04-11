@@ -75,6 +75,7 @@
     "models": "Models",
     "logs": "Logs",
     "providers": "Providers",
+    "betaHeaders": "Beta Headers",
     "settings": "Settings",
     "logout": "Logout"
   },
@@ -244,6 +245,38 @@
     "mappingDeleted": "Model mapping deleted successfully",
     "cannotEditDefault": "Default mappings cannot be edited. Create a custom override instead.",
     "cannotDeleteDefault": "Default mappings cannot be deleted."
+  },
+  "betaHeaders": {
+    "title": "Beta Headers",
+    "subtitle": "Manage how Anthropic beta headers are handled when proxied to Bedrock",
+    "addHeader": "Add Header",
+    "searchPlaceholder": "Search by header name...",
+    "headerName": "Header Name",
+    "type": "Type",
+    "types": {
+      "mapping": "Mapping",
+      "blocklist": "Blocklist"
+    },
+    "mappedTo": "Mapped To",
+    "description": "Description",
+    "allTypes": "All Types",
+    "form": {
+      "createTitle": "Add Beta Header",
+      "editTitle": "Edit Beta Header",
+      "headerName": "Header Name",
+      "headerNamePlaceholder": "e.g., my-feature-2026-01-01",
+      "type": "Type",
+      "mappedTo": "Mapped To (Bedrock Headers)",
+      "mappedToPlaceholder": "Enter header name and press Enter",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional note about this header rule",
+      "save": "Save"
+    },
+    "confirmDelete": "Are you sure you want to delete this beta header rule? If it was a blocklist entry, the header will pass through to Bedrock.",
+    "headerCreated": "Beta header created successfully",
+    "headerUpdated": "Beta header updated successfully",
+    "headerDeleted": "Beta header deleted successfully",
+    "noResults": "No beta headers found"
   },
   "providers": {
     "title": "Providers",

@@ -20,6 +20,7 @@ export default function Sidebar() {
     { path: '/pricing', icon: 'payments', label: t('nav.pricing'), section: 'config' },
     { path: '/model-mapping', icon: 'swap_horiz', label: t('nav.modelMapping'), section: 'config' },
     { path: '/providers', icon: 'cloud', label: t('nav.providers'), section: 'config' },
+    { path: '/beta-headers', icon: 'tune', label: t('nav.betaHeaders'), section: 'config' },
     { path: '/provider-keys', icon: 'key', label: 'Provider Keys', section: 'gateway' },
     { path: '/routing', icon: 'alt_route', label: 'Routing', section: 'gateway' },
     { path: '/failover', icon: 'sync_alt', label: 'Failover', section: 'gateway' },

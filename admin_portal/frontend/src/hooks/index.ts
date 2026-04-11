@@ -6,3 +6,4 @@ export * from './useProviderKeys';
 export * from './useRouting';
 export * from './useFailover';
 export * from './useProviders';
+export * from './useBetaHeaders';

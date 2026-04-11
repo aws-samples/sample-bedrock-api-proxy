@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from admin_portal.backend.api import auth, api_keys, pricing, dashboard, model_mapping
-from admin_portal.backend.api import provider_keys, providers, routing, failover
+from admin_portal.backend.api import provider_keys, providers, routing, failover, beta_headers
 from admin_portal.backend.middleware.cognito_auth import CognitoAuthMiddleware
 from admin_portal.backend.services.usage_aggregator import start_aggregator, stop_aggregator
 
@@ -97,6 +97,7 @@ app.include_router(provider_keys.router, prefix=f"{API_PREFIX}/provider-keys", t
 app.include_router(providers.router, prefix=f"{API_PREFIX}/providers", tags=["Providers"])
 app.include_router(routing.router, prefix=f"{API_PREFIX}/routing", tags=["Routing"])
 app.include_router(failover.router, prefix=f"{API_PREFIX}/failover", tags=["Failover"])
+app.include_router(beta_headers.router, prefix=f"{API_PREFIX}/beta-headers", tags=["Beta Headers"])
 
 
 @app.get("/health")

@@ -41,6 +41,7 @@ class DynamoDBClient:
         self.failover_chains_table_name = settings.dynamodb_failover_chains_table
         self.smart_routing_config_table_name = settings.dynamodb_smart_routing_config_table
         self.providers_table_name = settings.dynamodb_providers_table
+        self.beta_headers_table_name = settings.dynamodb_beta_headers_table
 
     def create_tables(self):
         """Create all required DynamoDB tables if they don't exist."""
@@ -54,6 +55,7 @@ class DynamoDBClient:
         self._create_failover_chains_table()
         self._create_smart_routing_config_table()
         self._create_providers_table()
+        self._create_beta_headers_table()
 
     def _create_api_keys_table(self):
         """Create API keys table."""
@@ -307,6 +309,27 @@ class DynamoDBClient:
         except ClientError as e:
             if e.response["Error"]["Code"] == "ResourceInUseException":
                 print(f"Table already exists: {self.providers_table_name}")
+            else:
+                raise
+
+    def _create_beta_headers_table(self):
+        """Create beta headers table for beta header management."""
+        try:
+            table = self.dynamodb.create_table(
+                TableName=self.beta_headers_table_name,
+                KeySchema=[
+                    {"AttributeName": "header_name", "KeyType": "HASH"},
+                ],
+                AttributeDefinitions=[
+                    {"AttributeName": "header_name", "AttributeType": "S"},
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            table.wait_until_exists()
+            print(f"Created table: {self.beta_headers_table_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceInUseException":
+                print(f"Table already exists: {self.beta_headers_table_name}")
             else:
                 raise
 
@@ -2050,3 +2073,71 @@ class SmartRoutingConfigManager:
         }
         self.table.put_item(Item=item)
         return item
+
+
+class BetaHeaderManager:
+    """Manager for beta header configuration."""
+
+    def __init__(self, dynamodb_client: DynamoDBClient):
+        self.dynamodb = dynamodb_client.dynamodb
+        self.table = self.dynamodb.Table(dynamodb_client.beta_headers_table_name)
+
+    def list_all(self) -> List[Dict[str, Any]]:
+        """List all beta header rules."""
+        response = self.table.scan()
+        return response.get("Items", [])
+
+    def get(self, header_name: str) -> Optional[Dict[str, Any]]:
+        """Get a beta header rule by name."""
+        try:
+            response = self.table.get_item(Key={"header_name": header_name})
+            return response.get("Item")
+        except ClientError:
+            return None
+
+    def create(self, header_name: str, header_type: str, mapped_to: Optional[List[str]] = None, description: str = "") -> Dict[str, Any]:
+        """Create a new beta header rule."""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        item = {
+            "header_name": header_name,
+            "header_type": header_type,
+            "mapped_to": mapped_to or [],
+            "description": description,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+        self.table.put_item(Item=item)
+        return item
+
+    def update(self, header_name: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update a beta header rule."""
+        existing = self.get(header_name)
+        if not existing:
+            return None
+
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        update_expr_parts = []
+        expr_values = {}
+        expr_names = {}
+        for key, value in updates.items():
+            safe_key = f"#k_{key}"
+            expr_names[safe_key] = key
+            expr_values[f":{key}"] = value
+            update_expr_parts.append(f"{safe_key} = :{key}")
+
+        self.table.update_item(
+            Key={"header_name": header_name},
+            UpdateExpression="SET " + ", ".join(update_expr_parts),
+            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeValues=expr_values,
+        )
+        return self.get(header_name)
+
+    def delete(self, header_name: str) -> bool:
+        """Delete a beta header rule."""
+        existing = self.get(header_name)
+        if not existing:
+            return False
+        self.table.delete_item(Key={"header_name": header_name})
+        return True

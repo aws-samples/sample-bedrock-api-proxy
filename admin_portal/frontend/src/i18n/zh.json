@@ -75,6 +75,7 @@
     "models": "模型",
     "logs": "日志",
     "providers": "服务提供商",
+    "betaHeaders": "Beta Headers",
     "settings": "设置",
     "logout": "退出登录"
   },
@@ -244,6 +245,38 @@
     "mappingDeleted": "模型映射删除成功",
     "cannotEditDefault": "无法编辑默认映射。请创建自定义覆盖。",
     "cannotDeleteDefault": "无法删除默认映射。"
+  },
+  "betaHeaders": {
+    "title": "Beta Headers",
+    "subtitle": "管理 Anthropic beta header 到 Bedrock 的代理处理规则",
+    "addHeader": "添加 Header",
+    "searchPlaceholder": "按 header 名称搜索...",
+    "headerName": "Header 名称",
+    "type": "类型",
+    "types": {
+      "mapping": "映射",
+      "blocklist": "屏蔽"
+    },
+    "mappedTo": "映射到",
+    "description": "描述",
+    "allTypes": "所有类型",
+    "form": {
+      "createTitle": "添加 Beta Header",
+      "editTitle": "编辑 Beta Header",
+      "headerName": "Header 名称",
+      "headerNamePlaceholder": "例如：my-feature-2026-01-01",
+      "type": "类型",
+      "mappedTo": "映射到（Bedrock Headers）",
+      "mappedToPlaceholder": "输入 header 名称后按回车",
+      "description": "描述",
+      "descriptionPlaceholder": "关于此规则的可选备注",
+      "save": "保存"
+    },
+    "confirmDelete": "确定要删除此 beta header 规则吗？如果是屏蔽项，删除后该 header 将会被透传到 Bedrock。",
+    "headerCreated": "Beta header 创建成功",
+    "headerUpdated": "Beta header 更新成功",
+    "headerDeleted": "Beta header 删除成功",
+    "noResults": "未找到 Beta header"
   },
   "providers": {
     "title": "服务提供商",

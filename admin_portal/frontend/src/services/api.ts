@@ -36,6 +36,10 @@ import type {
   ProviderUpdate,
   ProviderListResponse,
   ProviderTestResult,
+  BetaHeader,
+  BetaHeaderCreate,
+  BetaHeaderUpdate,
+  BetaHeaderListResponse,
 } from '../types';
 
 const API_BASE_URL = '/api';
@@ -458,6 +462,42 @@ export const failoverApi = {
 
   deleteChain: async (sourceModel: string): Promise<void> => {
     await apiFetch(`/failover/chains/${encodeURIComponent(sourceModel)}`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// Beta Headers API
+export const betaHeadersApi = {
+  list: async (params?: { type?: string; search?: string }): Promise<BetaHeaderListResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params?.type) searchParams.set('type', params.type);
+    if (params?.search) searchParams.set('search', params.search);
+
+    const query = searchParams.toString();
+    return apiFetch(`/beta-headers${query ? `?${query}` : ''}`);
+  },
+
+  get: async (headerName: string): Promise<BetaHeader> => {
+    return apiFetch(`/beta-headers/${encodeURIComponent(headerName)}`);
+  },
+
+  create: async (data: BetaHeaderCreate): Promise<BetaHeader> => {
+    return apiFetch('/beta-headers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  update: async (headerName: string, data: BetaHeaderUpdate): Promise<BetaHeader> => {
+    return apiFetch(`/beta-headers/${encodeURIComponent(headerName)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  delete: async (headerName: string): Promise<{ message: string }> => {
+    return apiFetch(`/beta-headers/${encodeURIComponent(headerName)}`, {
       method: 'DELETE',
     });
   },

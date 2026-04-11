@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     dynamodb_providers_table: str = Field(
         default="anthropic-proxy-providers", alias="DYNAMODB_PROVIDERS_TABLE"
     )
+    dynamodb_beta_headers_table: str = Field(
+        default="anthropic-proxy-beta-headers", alias="DYNAMODB_BETA_HEADERS_TABLE"
+    )
     usage_ttl_days: int = Field(
         default=7,
         alias="USAGE_TTL_DAYS",
@@ -203,25 +206,13 @@ class Settings(BaseSettings):
         description="Mapping of Anthropic beta headers to Bedrock beta headers",
     )
 
-    # Beta headers that pass through directly without mapping
-    # These are the same between Anthropic and Bedrock APIs
-    beta_headers_passthrough: List[str] = Field(
-        default=[
-            "fine-grained-tool-streaming-2025-05-14",
-            "interleaved-thinking-2025-05-14",
-            "context-management-2025-06-27",
-            "compact-2026-01-12",
-        ],
-        alias="BETA_HEADERS_PASSTHROUGH",
-        description="Beta headers that pass through to Bedrock without mapping",
-    )
-
     # Beta headers that should be filtered out (NOT passed to Bedrock)
     # These are Anthropic-specific headers that Bedrock doesn't support
     beta_headers_blocklist: List[str] = Field(
         default=[
             "prompt-caching-scope-2026-01-05",
-            "redact-thinking-2026-02-12"
+            "redact-thinking-2026-02-12",
+            "advisor-tool-2026-03-01",
         ],
         alias="BETA_HEADERS_BLOCKLIST",
         description="Beta headers that should NOT be passed to Bedrock (unsupported)",
