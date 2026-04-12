@@ -893,7 +893,11 @@ class BedrockService:
             print(f"\n[ERROR] InvokeModel ClientError in request {request_id}")
             print(f"[ERROR] Code: {error_code}")
             print(f"[ERROR] Message: {error_message}")
-            print(f"[ERROR] Response: {e.response}\n")
+            print(f"[ERROR] Response: {e.response}")
+            if "invalid beta" in error_message.lower():
+                print(f"[ERROR] Beta headers sent: {native_request.get('anthropic_beta', [])}")
+                print(f"[ERROR] Original anthropic-beta header: {anthropic_beta}")
+            print()
 
             # Map Bedrock error to appropriate exception
             raise map_bedrock_error(error_code, error_message)
@@ -1389,6 +1393,8 @@ class BedrockService:
             error_code = e.response["Error"]["Code"]
             error_message = e.response["Error"]["Message"]
             print(f"[ERROR] InvokeModelWithResponseStream ClientError: {error_code}: {error_message}")
+            if "invalid beta" in error_message.lower():
+                print(f"[ERROR] Beta headers sent: {native_request.get('anthropic_beta', [])}")
             event_queue.put(("error", (error_code, error_message)))
 
         except Exception as e:
