@@ -701,7 +701,7 @@ class BedrockService:
         # Route Claude models to InvokeModel API for better feature support
         if self._is_claude_model(request.model):
             print(f"[BEDROCK] Using InvokeModel API for Claude model: {request.model}")
-            return self._invoke_model_native_sync(request, request_id, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id)
+            return self._invoke_model_native_sync(request, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id)
 
         # Route to OpenAI-compat service if enabled
         if self._openai_compat_service:
@@ -808,6 +808,7 @@ class BedrockService:
 
     def _invoke_model_native_sync(
         self, request: MessageRequest, request_id: Optional[str] = None,
+        service_tier: Optional[str] = None,
         anthropic_beta: Optional[str] = None, cache_ttl: Optional[str] = None,
         provider_id: Optional[str] = None
     ) -> MessageResponse:
@@ -820,6 +821,7 @@ class BedrockService:
         Args:
             request: Anthropic MessageRequest
             request_id: Optional request ID
+            service_tier: Optional Bedrock service tier ('default', 'flex', 'priority', 'reserved')
             anthropic_beta: Optional beta header from Anthropic client
             cache_ttl: Optional cache TTL override from API key
 
@@ -839,6 +841,9 @@ class BedrockService:
         self._apply_cache_ttl(native_request, api_key_cache_ttl=cache_ttl)
         self._strip_cache_scope(native_request)
 
+        # Determine service tier to use
+        effective_service_tier = service_tier or settings.default_service_tier
+
         print(f"[BEDROCK NATIVE] InvokeModel request for {request_id}:")
         print(f"  - Model ID: {bedrock_model_id}")
         print(f"  - Messages count: {len(native_request.get('messages', []))}")
@@ -848,6 +853,7 @@ class BedrockService:
         print(f"  - max_tokens: {native_request.get('max_tokens')}")
         print(f"  - thinking: {native_request.get('thinking')}")
         print(f"  - Beta headers: {native_request.get('anthropic_beta', [])}")
+        print(f"  - Service tier: {effective_service_tier}")
 
         # Debug: Log each message's content types for debugging thinking block ordering
         for idx, msg in enumerate(native_request.get('messages', [])):
@@ -862,13 +868,21 @@ class BedrockService:
         try:
             print(f"[BEDROCK NATIVE] Calling InvokeModel API...")
 
-            # Call InvokeModel API with native Anthropic format
-            response = self.get_client(provider_id).invoke_model(
+            # Build InvokeModel API kwargs
+            invoke_kwargs = dict(
                 modelId=bedrock_model_id,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(native_request)
             )
+
+            # Add serviceTier if not 'default'
+            # Note: InvokeModel API takes serviceTier as a plain string, unlike Converse API which uses {"type": ...}
+            if effective_service_tier and effective_service_tier != "default":
+                invoke_kwargs["serviceTier"] = effective_service_tier
+
+            # Call InvokeModel API with native Anthropic format
+            response = self.get_client(provider_id).invoke_model(**invoke_kwargs)
 
             # Parse response body (native Anthropic format)
             response_body = json.loads(response["body"].read())
@@ -876,6 +890,7 @@ class BedrockService:
             print(f"[BEDROCK NATIVE] Received response from InvokeModel")
             print(f"  - Stop reason: {response_body.get('stop_reason')}")
             print(f"  - Usage: {response_body.get('usage')}")
+            print(f"  - Service tier used: {response.get('serviceTier', 'default')}")
 
             # Convert native response to MessageResponse
             message_id = request_id or f"msg_{uuid4().hex}"
@@ -894,6 +909,35 @@ class BedrockService:
             print(f"[ERROR] Code: {error_code}")
             print(f"[ERROR] Message: {error_message}")
             print(f"[ERROR] Response: {e.response}\n")
+
+            # Check if the error is related to serviceTier not being supported
+            # If so, retry with default tier
+            if (effective_service_tier and effective_service_tier != "default" and
+                ("serviceTier" in error_message.lower() or
+                 "service tier" in error_message.lower() or
+                 "does not support" in error_message.lower())):
+                print(f"[BEDROCK NATIVE] Service tier '{effective_service_tier}' not supported, retrying with default...")
+                invoke_kwargs.pop("serviceTier", None)
+                try:
+                    response = self.get_client(provider_id).invoke_model(**invoke_kwargs)
+                    response_body = json.loads(response["body"].read())
+                    print(f"[BEDROCK NATIVE] Retry with default tier succeeded")
+                    print(f"  - Stop reason: {response_body.get('stop_reason')}")
+                    print(f"  - Usage: {response_body.get('usage')}")
+
+                    message_id = request_id or f"msg_{uuid4().hex}"
+                    anthropic_response = self._convert_native_response_to_message_response(
+                        response_body, request.model, message_id
+                    )
+                    return anthropic_response
+                except ClientError as retry_error:
+                    retry_code = retry_error.response["Error"]["Code"]
+                    retry_message = retry_error.response["Error"]["Message"]
+                    print(f"[ERROR] Retry with default tier also failed: {retry_code}: {retry_message}")
+                    raise map_bedrock_error(retry_code, retry_message)
+                except Exception as retry_error:
+                    print(f"[ERROR] Retry with default tier also failed: {retry_error}")
+                    raise map_bedrock_error(error_code, error_message)
 
             # Map Bedrock error to appropriate exception
             raise map_bedrock_error(error_code, error_message)
@@ -1037,6 +1081,9 @@ class BedrockService:
                 from app.tracing.context import propagate_context_to_thread
                 _otel_ctx = propagate_context_to_thread()
 
+            # Determine service tier to use (shared by both native and Converse paths)
+            effective_service_tier = service_tier or settings.default_service_tier
+
             # Route Claude models to InvokeModelWithResponseStream for better feature support
             if self._is_claude_model(request.model):
                 print(f"[BEDROCK STREAM] Using InvokeModelWithResponseStream for Claude model: {request.model}")
@@ -1059,6 +1106,7 @@ class BedrockService:
                 print(f"  - max_tokens: {native_request.get('max_tokens')}")
                 print(f"  - thinking: {native_request.get('thinking')}")
                 print(f"  - output_config: {native_request.get('output_config')}")
+                print(f"  - Service tier: {effective_service_tier}")
 
                 # Submit the native stream worker to the thread pool
                 future = loop.run_in_executor(
@@ -1068,6 +1116,7 @@ class BedrockService:
                     native_request,
                     request,
                     message_id,
+                    effective_service_tier,
                     event_queue,
                     _otel_ctx,
                     provider_id
@@ -1077,9 +1126,6 @@ class BedrockService:
 
                 # Convert request to Bedrock format (with beta header mapping)
                 bedrock_request = self.anthropic_to_bedrock.convert_request(request, anthropic_beta)
-
-                # Determine service tier to use
-                effective_service_tier = service_tier or settings.default_service_tier
 
                 print(f"[BEDROCK STREAM] Bedrock request params:")
                 print(f"  - Model ID: {bedrock_request.get('modelId')}")
@@ -1308,6 +1354,7 @@ class BedrockService:
         native_request: Dict[str, Any],
         _request: MessageRequest,  # Kept for potential future use
         _message_id: str,  # Kept for potential future use
+        effective_service_tier: str,
         event_queue: queue.Queue,
         otel_ctx=None,
         provider_id: Optional[str] = None
@@ -1323,6 +1370,7 @@ class BedrockService:
             native_request: Native Anthropic-formatted request
             request: Original Anthropic request
             message_id: Message ID for the response
+            effective_service_tier: Service tier being used
             event_queue: Queue for passing events to async consumer
             otel_ctx: Optional OTEL context for trace propagation
         """
@@ -1335,13 +1383,24 @@ class BedrockService:
         try:
             print(f"[BEDROCK STREAM NATIVE] Calling InvokeModelWithResponseStream API...")
 
-            # Call InvokeModelWithResponseStream API
-            response = self.get_client(provider_id).invoke_model_with_response_stream(
+            # Build InvokeModelWithResponseStream kwargs
+            invoke_kwargs = dict(
                 modelId=bedrock_model_id,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(native_request)
             )
+
+            # Add serviceTier if not 'default'
+            # Note: InvokeModelWithResponseStream API takes serviceTier as a plain string, unlike Converse API which uses {"type": ...}
+            if effective_service_tier and effective_service_tier != "default":
+                invoke_kwargs["serviceTier"] = effective_service_tier
+
+            # Call InvokeModelWithResponseStream API
+            response = self.get_client(provider_id).invoke_model_with_response_stream(**invoke_kwargs)
+
+            # Log service tier from response metadata
+            print(f"[BEDROCK STREAM NATIVE] Service tier used: {response.get('serviceTier', 'default')}")
 
             stream = response.get("body")
             if not stream:
@@ -1389,6 +1448,36 @@ class BedrockService:
             error_code = e.response["Error"]["Code"]
             error_message = e.response["Error"]["Message"]
             print(f"[ERROR] InvokeModelWithResponseStream ClientError: {error_code}: {error_message}")
+
+            # Check if service tier retry is needed
+            if (effective_service_tier and effective_service_tier != "default" and
+                ("serviceTier" in error_message.lower() or
+                 "service tier" in error_message.lower() or
+                 "does not support" in error_message.lower())):
+
+                print(f"[BEDROCK STREAM NATIVE] Retrying with default tier...")
+                invoke_kwargs.pop("serviceTier", None)
+
+                try:
+                    response = self.get_client(provider_id).invoke_model_with_response_stream(**invoke_kwargs)
+                    stream = response.get("body")
+                    if stream:
+                        for event in stream:
+                            chunk = event.get("chunk")
+                            if chunk:
+                                chunk_bytes = chunk.get("bytes")
+                                if chunk_bytes:
+                                    event_data = json.loads(chunk_bytes.decode("utf-8"))
+                                    event_type = event_data.get("type", "unknown")
+                                    sse_event = f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+                                    event_queue.put(("event", sse_event))
+
+                        print(f"[BEDROCK STREAM NATIVE] Retry stream completed")
+                        event_queue.put(("done", None))
+                        return
+                except Exception as retry_error:
+                    print(f"[ERROR] Retry also failed: {retry_error}")
+
             event_queue.put(("error", (error_code, error_message)))
 
         except Exception as e:
