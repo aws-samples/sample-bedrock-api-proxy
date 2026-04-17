@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     default_model_mapping: Dict[str, str] = Field(
         default={
             # Anthropic model IDs -> Bedrock model ARNs
+            "claude-opus-4-7": "global.anthropic.claude-opus-4-7",
             "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
             "claude-opus-4-6": "global.anthropic.claude-opus-4-6-v1",
             "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
@@ -212,7 +213,7 @@ class Settings(BaseSettings):
         default=[
             "prompt-caching-scope-2026-01-05",
             "redact-thinking-2026-02-12",
-            "advisor-tool-2026-03-01",
+            "advisor-tool-2026-03-01"
         ],
         alias="BETA_HEADERS_BLOCKLIST",
         description="Beta headers that should NOT be passed to Bedrock (unsupported)",
@@ -227,7 +228,9 @@ class Settings(BaseSettings):
             "claude-opus-4-6",
             "global.anthropic.claude-opus-4-6-v1",
             "claude-sonnet-4-6",
-            "global.anthropic.claude-sonnet-4-6"
+            "global.anthropic.claude-sonnet-4-6",
+            "claude-opus-4-7",
+            "global.anthropic.claude-opus-4-7"
         ],
         alias="BETA_HEADER_SUPPORTED_MODELS",
         description="List of model IDs that support beta header mapping",
