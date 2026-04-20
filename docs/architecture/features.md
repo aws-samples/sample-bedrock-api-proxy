@@ -388,7 +388,9 @@ inference profile resources.
 
 **Usage logging:** the original ARN remains in the `model` column of the usage
 table. The resolved foundation model ID is stored in
-`metadata.resolved_model` for cost attribution.
+`metadata.resolved_model` for cost attribution. `metadata.resolved_model` is
+only set when resolution actually changed the model ID (i.e. for application
+inference profile ARNs); for plain model IDs the field is absent.
 
 **System-defined profiles** (e.g. `us.anthropic.claude-...`) are not affected
 — their identifier carries the model name already.

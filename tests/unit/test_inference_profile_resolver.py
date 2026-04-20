@@ -1,5 +1,5 @@
 """Tests for InferenceProfileResolver."""
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -81,9 +81,6 @@ def test_application_profile_result_is_cached():
     resolver.resolve(APP_PROFILE_ARN)
 
     assert client.get_inference_profile.call_count == 1
-
-
-from unittest.mock import patch
 
 
 def test_resolution_error_on_client_exception():
