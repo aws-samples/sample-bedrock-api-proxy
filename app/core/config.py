@@ -228,6 +228,14 @@ class Settings(BaseSettings):
         description="Keywords matched against model IDs to enable beta header mapping (substring, case-insensitive)",
     )
 
+    # Inference Profile Resolver
+    inference_profile_cache_ttl_seconds: int = Field(
+        default=3600,
+        alias="INFERENCE_PROFILE_CACHE_TTL_SECONDS",
+        description="TTL (seconds) for the in-memory cache mapping application "
+                    "inference profile ARNs to their underlying foundation model ID.",
+    )
+
     # Beta features that require InvokeModel API instead of Converse API
     # These features are only available via InvokeModel/InvokeModelWithResponseStream
     beta_headers_requiring_invoke_model: List[str] = Field(
