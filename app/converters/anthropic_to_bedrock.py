@@ -33,6 +33,9 @@ from app.schemas.anthropic import (
     CodeExecutionResultContent,
 )
 from app.schemas.web_search import WEB_SEARCH_TOOL_TYPES
+from app.services.inference_profile_resolver import (
+    get_inference_profile_resolver,
+)
 
 
 class AnthropicToBedrockConverter:
@@ -208,13 +211,14 @@ class AnthropicToBedrockConverter:
         """
         Check if the current model is a Claude model.
 
-        Returns:
-            True if the model is Claude/Anthropic, False otherwise
+        Application inference profile ARNs are resolved to their underlying
+        foundation model before keyword matching.
         """
         if not self._resolved_model_id:
             return False
 
-        model_id_lower = self._resolved_model_id.lower()
+        resolved = get_inference_profile_resolver().resolve(self._resolved_model_id)
+        model_id_lower = resolved.lower()
         return "anthropic" in model_id_lower or "claude" in model_id_lower
 
     def _is_nova_2_model(self) -> bool:
@@ -254,22 +258,25 @@ class AnthropicToBedrockConverter:
         """
         Check if the model supports beta header mapping.
 
-        Args:
-            original_model_id: The original Anthropic model ID from the request
-
-        Returns:
-            True if the model supports beta header mapping
+        Matches keywords against the original model ID, the mapping-resolved
+        ID, and (for application inference profile ARNs) the underlying
+        foundation model ID.
         """
         if not self._resolved_model_id:
             return False
 
-        # Substring keyword match (case-insensitive) against original and resolved IDs
         keywords = [kw.lower() for kw in settings.beta_header_supported_models if kw]
         if not keywords:
             return False
-        original_lower = (original_model_id or "").lower()
-        resolved_lower = self._resolved_model_id.lower()
-        return any(kw in original_lower or kw in resolved_lower for kw in keywords)
+
+        candidates = [
+            (original_model_id or "").lower(),
+            self._resolved_model_id.lower(),
+            get_inference_profile_resolver()
+            .resolve(self._resolved_model_id)
+            .lower(),
+        ]
+        return any(kw in cand for kw in keywords for cand in candidates)
 
     def _get_tools_with_examples(self, tools: List[Any]) -> List[Dict[str, Any]]:
         """

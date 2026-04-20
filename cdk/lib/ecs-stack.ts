@@ -152,6 +152,7 @@ export class ECSStack extends cdk.Stack {
           'bedrock:InvokeModel',
           'bedrock:InvokeModelWithResponseStream',
           'bedrock:ListFoundationModels',
+          'bedrock:GetInferenceProfile',
         ],
         resources: ['*'],
       })

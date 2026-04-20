@@ -15,6 +15,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from app.core.config import settings
+from app.services.inference_profile_resolver import get_inference_profile_resolver
 
 
 class DynamoDBClient:
@@ -882,6 +883,20 @@ class APIKeyManager:
             return {"success": False, "budget_exceeded": False}
 
 
+def _safe_resolve_model(model: str) -> str:
+    """Resolve an inference profile ARN; fall back to the input on failure.
+
+    Usage recording happens after the upstream call succeeded, so the ARN
+    should already be in the resolver cache. We still guard against unexpected
+    errors so that a resolver bug never drops usage data.
+    """
+    try:
+        return get_inference_profile_resolver().resolve(model)
+    except Exception as exc:
+        print(f"[USAGE_TRACKER] Resolver failure for {model}: {exc}")
+        return model
+
+
 class UsageTracker:
     """Tracker for API usage and analytics."""
 
@@ -924,6 +939,11 @@ class UsageTracker:
         current_time = int(time.time())
         timestamp = str(current_time * 1000)  # milliseconds as string
 
+        resolved_model = _safe_resolve_model(model)
+        metadata = dict(metadata) if metadata else {}
+        if resolved_model != model:
+            metadata["resolved_model"] = resolved_model
+
         item = {
             "api_key": api_key,
             "timestamp": timestamp,
@@ -936,7 +956,7 @@ class UsageTracker:
             "total_tokens": input_tokens + output_tokens,
             "success": success,
             "error_message": error_message,
-            "metadata": metadata or {},
+            "metadata": metadata,
         }
 
         if cache_ttl:

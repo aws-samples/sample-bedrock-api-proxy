@@ -121,6 +121,7 @@ This lightweight API convertion service enables you to use various large languag
 - Kimi 2.5
 - minimax2.1
 - Any other Bedrock model supporting the Converse API or OpenAI Chat Completions API
+- Bedrock **application inference profile ARNs** are supported; the proxy resolves them to the underlying foundation model for correct routing, beta headers, and billing.
 
 ## Usage Cases
 

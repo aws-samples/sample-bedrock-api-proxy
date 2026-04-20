@@ -118,6 +118,7 @@
 - Kimi 2.5
 - minimax2.1
 - 任何其他支持 Converse API 或 OpenAI Chat Completions API 的 Bedrock 模型
+- 支持 Bedrock **应用推理配置（application inference profile）ARN**；代理会将其解析为底层基础模型，以保证路由、beta headers 和计费的准确性。
 
 ## 使用场景
 
