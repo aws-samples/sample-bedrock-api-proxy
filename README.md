@@ -119,9 +119,12 @@ This lightweight API convertion service enables you to use various large languag
 - Qwen3-coder-480b
 - Qwen3-235b-instruct
 - Kimi 2.5
-- minimax2.1
+- minimax 2.5
+- GLM 4.7/5
 - Any other Bedrock model supporting the Converse API or OpenAI Chat Completions API
 - Bedrock **application inference profile ARNs** are supported; the proxy resolves them to the underlying foundation model for correct routing, beta headers, and billing.
+you can create a model id alas name mapping to arn in admin portal, or use arn directly in Claude Code.  
+![image](./assets/screenshot-20260420-183419.png)
 
 ## Usage Cases
 

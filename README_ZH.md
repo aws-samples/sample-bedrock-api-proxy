@@ -116,10 +116,12 @@
 - Qwen3-coder-480b
 - Qwen3-235b-instruct
 - Kimi 2.5
-- minimax2.1
+- minimax2.5
+- GLM 4.7/5
 - 任何其他支持 Converse API 或 OpenAI Chat Completions API 的 Bedrock 模型
 - 支持 Bedrock **应用推理配置（application inference profile）ARN**；代理会将其解析为底层基础模型，以保证路由、beta headers 和计费的准确性。
-
+你可以事先在admin portal中创建model id 映射到arn, 或者直接在Claude Code中使用arn    
+![image](./assets/screenshot-20260420-183419.png)
 ## 使用场景
 
 ### 作为 Claude Code 的模型代理
