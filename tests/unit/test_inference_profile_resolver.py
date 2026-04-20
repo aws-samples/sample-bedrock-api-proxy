@@ -81,3 +81,45 @@ def test_application_profile_result_is_cached():
     resolver.resolve(APP_PROFILE_ARN)
 
     assert client.get_inference_profile.call_count == 1
+
+
+from unittest.mock import patch
+
+
+def test_resolution_error_on_client_exception():
+    from botocore.exceptions import ClientError
+
+    client = MagicMock()
+    client.get_inference_profile.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+        "GetInferenceProfile",
+    )
+    resolver = InferenceProfileResolver(bedrock_client=client, ttl_seconds=60)
+
+    with pytest.raises(InferenceProfileResolutionError) as excinfo:
+        resolver.resolve(APP_PROFILE_ARN)
+
+    assert excinfo.value.arn == APP_PROFILE_ARN
+    assert isinstance(excinfo.value.cause, ClientError)
+
+
+def test_resolution_error_on_empty_models():
+    client = MagicMock()
+    client.get_inference_profile.return_value = {"models": []}
+    resolver = InferenceProfileResolver(bedrock_client=client, ttl_seconds=60)
+
+    with pytest.raises(InferenceProfileResolutionError):
+        resolver.resolve(APP_PROFILE_ARN)
+
+
+def test_ttl_expiry_triggers_refetch():
+    client = _make_client_with_profile()
+    resolver = InferenceProfileResolver(bedrock_client=client, ttl_seconds=60)
+
+    with patch("app.services.inference_profile_resolver.time") as mock_time:
+        mock_time.time.return_value = 1000.0
+        resolver.resolve(APP_PROFILE_ARN)
+        mock_time.time.return_value = 1000.0 + 120  # past TTL
+        resolver.resolve(APP_PROFILE_ARN)
+
+    assert client.get_inference_profile.call_count == 2
