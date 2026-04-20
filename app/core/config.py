@@ -219,21 +219,13 @@ class Settings(BaseSettings):
         description="Beta headers that should NOT be passed to Bedrock (unsupported)",
     )
 
-    # Models that support beta header mapping
-    # Only these models will have beta headers mapped and passed to Bedrock
+    # Keywords for models that support beta header mapping
+    # A model is considered supported if any keyword is a substring of its
+    # original or resolved model ID (case-insensitive).
     beta_header_supported_models: List[str] = Field(
-        default=[
-            "claude-opus-4-5-20251101",
-            "global.anthropic.claude-opus-4-5-20251101-v1:0",
-            "claude-opus-4-6",
-            "global.anthropic.claude-opus-4-6-v1",
-            "claude-sonnet-4-6",
-            "global.anthropic.claude-sonnet-4-6",
-            "claude-opus-4-7",
-            "global.anthropic.claude-opus-4-7"
-        ],
+        default=["claude"],
         alias="BETA_HEADER_SUPPORTED_MODELS",
-        description="List of model IDs that support beta header mapping",
+        description="Keywords matched against model IDs to enable beta header mapping (substring, case-insensitive)",
     )
 
     # Beta features that require InvokeModel API instead of Converse API

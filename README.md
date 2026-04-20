@@ -333,7 +333,7 @@ message = client.messages.create(
 Modify `BETA_HEADER_MAPPING` in `.env` or `app/core/config.py`.
 
 **Enable beta header mapping for more models:**
-Add model IDs to the `BETA_HEADER_SUPPORTED_MODELS` list.
+Add keywords to `BETA_HEADER_SUPPORTED_MODELS` (substring, case-insensitive match against the model ID). Default `["claude"]` covers all Claude variants.
 
 ## Prompt Cache TTL (1-Hour Caching)
 

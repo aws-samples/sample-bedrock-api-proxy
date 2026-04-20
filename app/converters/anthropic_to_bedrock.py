@@ -263,12 +263,13 @@ class AnthropicToBedrockConverter:
         if not self._resolved_model_id:
             return False
 
-        # Check both original model ID and resolved model ID against supported models
-        supported_models = settings.beta_header_supported_models
-        return (
-            original_model_id in supported_models or
-            self._resolved_model_id in supported_models
-        )
+        # Substring keyword match (case-insensitive) against original and resolved IDs
+        keywords = [kw.lower() for kw in settings.beta_header_supported_models if kw]
+        if not keywords:
+            return False
+        original_lower = (original_model_id or "").lower()
+        resolved_lower = self._resolved_model_id.lower()
+        return any(kw in original_lower or kw in resolved_lower for kw in keywords)
 
     def _get_tools_with_examples(self, tools: List[Any]) -> List[Dict[str, Any]]:
         """

@@ -264,11 +264,9 @@ beta_header_mapping: Dict[str, List[str]] = {
     ],
 }
 
-# Models that support beta header mapping
-beta_header_supported_models: List[str] = [
-    "claude-opus-4-5-20251101",
-    "global.anthropic.claude-opus-4-5-20251101-v1:0",
-]
+# Keywords matched (substring, case-insensitive) against model IDs
+# to enable beta header mapping. Default covers all Claude variants.
+beta_header_supported_models: List[str] = ["claude"]
 ```
 
 **How it works:**

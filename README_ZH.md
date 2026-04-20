@@ -331,7 +331,7 @@ message = client.messages.create(
 在 `.env` 或 `app/core/config.py` 中修改 `BETA_HEADER_MAPPING`。
 
 **为更多模型启用 beta header 映射：**
-将模型 ID 添加到 `BETA_HEADER_SUPPORTED_MODELS` 列表。
+向 `BETA_HEADER_SUPPORTED_MODELS` 添加关键字（对模型 ID 做不区分大小写的子串匹配）。默认值 `["claude"]` 已覆盖所有 Claude 变体。
 
 ## 提示词缓存 TTL（1 小时缓存）
 
