@@ -41,12 +41,33 @@ class InferenceProfileResolver:
         """Return the underlying foundation model ID for an ARN, else input."""
         if not model_id or not _APPLICATION_PROFILE_ARN.match(model_id):
             return model_id
-        # Cache lookup
         with self._lock:
             cached = self._cache.get(model_id)
             if cached and cached[1] > time.time():
                 return cached[0]
-        # Placeholder — will implement in Task 3.
-        raise InferenceProfileResolutionError(
-            model_id, "Resolution not yet implemented"
+        # Cache miss — call Bedrock control plane (outside the lock so concurrent
+        # callers for different ARNs don't serialize).
+        try:
+            resp = self._client.get_inference_profile(
+                inferenceProfileIdentifier=model_id
+            )
+            underlying = resp["models"][0]["modelArn"]
+        except (KeyError, IndexError) as exc:
+            raise InferenceProfileResolutionError(
+                model_id,
+                f"Bedrock response missing models[0].modelArn for {model_id}",
+                cause=exc,
+            ) from exc
+        except Exception as exc:  # boto3 ClientError, network, etc.
+            raise InferenceProfileResolutionError(
+                model_id,
+                f"Failed to resolve inference profile {model_id}: {exc}",
+                cause=exc,
+            ) from exc
+        with self._lock:
+            self._cache[model_id] = (underlying, time.time() + self._ttl)
+        print(
+            f"[RESOLVER] Resolved {model_id} -> {underlying} "
+            f"(ttl={self._ttl}s)"
         )
+        return underlying

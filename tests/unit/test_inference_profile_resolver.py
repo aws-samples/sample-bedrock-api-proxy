@@ -37,3 +37,47 @@ def test_bedrock_foundation_model_id_passes_through():
 
     assert result == "global.anthropic.claude-opus-4-7-v1"
     client.get_inference_profile.assert_not_called()
+
+
+APP_PROFILE_ARN = (
+    "arn:aws:bedrock:us-east-1:123456789012:"
+    "application-inference-profile/abcd1234"
+)
+UNDERLYING_MODEL = (
+    "arn:aws:bedrock:us-east-1::foundation-model/"
+    "anthropic.claude-sonnet-4-5-20250929-v1:0"
+)
+
+
+def _make_client_with_profile(model_arn: str = UNDERLYING_MODEL):
+    client = MagicMock()
+    client.get_inference_profile.return_value = {
+        "inferenceProfileArn": APP_PROFILE_ARN,
+        "inferenceProfileName": "test-profile",
+        "models": [{"modelArn": model_arn}],
+        "type": "APPLICATION",
+    }
+    return client
+
+
+def test_application_profile_calls_bedrock_and_returns_underlying_model():
+    client = _make_client_with_profile()
+    resolver = InferenceProfileResolver(bedrock_client=client, ttl_seconds=60)
+
+    result = resolver.resolve(APP_PROFILE_ARN)
+
+    assert result == UNDERLYING_MODEL
+    client.get_inference_profile.assert_called_once_with(
+        inferenceProfileIdentifier=APP_PROFILE_ARN
+    )
+
+
+def test_application_profile_result_is_cached():
+    client = _make_client_with_profile()
+    resolver = InferenceProfileResolver(bedrock_client=client, ttl_seconds=60)
+
+    resolver.resolve(APP_PROFILE_ARN)
+    resolver.resolve(APP_PROFILE_ARN)
+    resolver.resolve(APP_PROFILE_ARN)
+
+    assert client.get_inference_profile.call_count == 1
