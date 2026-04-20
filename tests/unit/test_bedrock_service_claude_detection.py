@@ -1,16 +1,15 @@
 """Verify _is_claude_model resolves application inference profile ARNs."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 
 @pytest.fixture
-def service(monkeypatch):
+def service():
     """Build a BedrockService without running its real __init__."""
     from app.services.bedrock_service import BedrockService
 
-    svc = BedrockService.__new__(BedrockService)
-    return svc
+    return BedrockService.__new__(BedrockService)
 
 
 def test_is_claude_model_plain_id(service):

@@ -5,7 +5,7 @@ import pytest
 
 
 @pytest.fixture
-def converter(monkeypatch):
+def converter():
     from app.converters.anthropic_to_bedrock import AnthropicToBedrockConverter
 
     conv = AnthropicToBedrockConverter.__new__(AnthropicToBedrockConverter)
