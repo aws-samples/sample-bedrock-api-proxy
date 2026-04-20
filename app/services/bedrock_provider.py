@@ -11,6 +11,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from app.core.config import settings
 from app.services.provider_base import LLMProvider, ProviderResponse
 from app.schemas.anthropic import MessageRequest, MessageResponse
+from app.services.inference_profile_resolver import (
+    get_inference_profile_resolver,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,8 @@ class BedrockProvider(LLMProvider):
         if not self._pricing:
             return 0.0
         try:
-            pricing = self._pricing.get_pricing(model_id)
+            resolved = get_inference_profile_resolver().resolve(model_id)
+            pricing = self._pricing.get_pricing(resolved)
             if not pricing:
                 return 0.0
             input_price = float(pricing.get("input_price", 0))
