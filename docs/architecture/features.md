@@ -367,6 +367,34 @@ Full OpenTelemetry tracing system for LLM observability, following the OTEL GenA
 
 ---
 
+## Application Inference Profile Resolution
+
+Bedrock **application inference profiles** use opaque ARNs such as:
+
+```
+arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcd1234
+```
+
+The ARN doesn't reveal which foundation model backs the profile. To keep
+routing (InvokeModel vs Converse), beta header mapping, and billing correct,
+the proxy resolves the ARN to its underlying model via
+`bedrock.get_inference_profile`.
+
+**Config:** `INFERENCE_PROFILE_CACHE_TTL_SECONDS` (default `3600`) controls the
+in-memory cache TTL per worker.
+
+**IAM:** the task role needs `bedrock:GetInferenceProfile` on the account's
+inference profile resources.
+
+**Usage logging:** the original ARN remains in the `model` column of the usage
+table. The resolved foundation model ID is stored in
+`metadata.resolved_model` for cost attribution.
+
+**System-defined profiles** (e.g. `us.anthropic.claude-...`) are not affected
+— their identifier carries the model name already.
+
+---
+
 ## Admin Portal
 
 The admin portal is a separate FastAPI application for managing API keys, usage, pricing, and budgets.
