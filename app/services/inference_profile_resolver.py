@@ -13,6 +13,11 @@ import threading
 import time
 from typing import Dict, Optional, Tuple
 
+import boto3
+from botocore.config import Config
+
+from app.core.config import settings
+
 
 class InferenceProfileResolutionError(Exception):
     """Raised when an application inference profile ARN cannot be resolved."""
@@ -71,3 +76,38 @@ class InferenceProfileResolver:
             f"(ttl={self._ttl}s)"
         )
         return underlying
+
+
+_resolver_instance: Optional["InferenceProfileResolver"] = None
+_resolver_lock = threading.Lock()
+
+
+def _build_bedrock_client():
+    """Build a boto3 client for the Bedrock control plane."""
+    config = Config(
+        read_timeout=10,
+        connect_timeout=5,
+        retries={"max_attempts": 2, "mode": "standard"},
+    )
+    return boto3.client(
+        "bedrock",
+        region_name=settings.aws_region,
+        endpoint_url=None,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        aws_session_token=settings.aws_session_token,
+        config=config,
+    )
+
+
+def get_inference_profile_resolver() -> InferenceProfileResolver:
+    """Return the process-wide resolver singleton."""
+    global _resolver_instance
+    if _resolver_instance is None:
+        with _resolver_lock:
+            if _resolver_instance is None:
+                _resolver_instance = InferenceProfileResolver(
+                    bedrock_client=_build_bedrock_client(),
+                    ttl_seconds=settings.inference_profile_cache_ttl_seconds,
+                )
+    return _resolver_instance

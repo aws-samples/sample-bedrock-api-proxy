@@ -123,3 +123,18 @@ def test_ttl_expiry_triggers_refetch():
         resolver.resolve(APP_PROFILE_ARN)
 
     assert client.get_inference_profile.call_count == 2
+
+
+def test_get_inference_profile_resolver_returns_singleton(monkeypatch):
+    # Ensure fresh module state.
+    import app.services.inference_profile_resolver as mod
+    monkeypatch.setattr(mod, "_resolver_instance", None)
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(mod, "_build_bedrock_client", lambda: fake_client)
+
+    a = mod.get_inference_profile_resolver()
+    b = mod.get_inference_profile_resolver()
+
+    assert a is b
+    assert a._client is fake_client
