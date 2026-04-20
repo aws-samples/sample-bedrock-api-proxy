@@ -30,6 +30,9 @@ from app.core.config import settings
 from app.schemas.web_search import WEB_SEARCH_TOOL_TYPES, decode_content as _ws_decode
 from app.core.exceptions import BedrockAPIError, map_bedrock_error
 from app.schemas.anthropic import CountTokensRequest, MessageRequest, MessageResponse
+from app.services.inference_profile_resolver import (
+    get_inference_profile_resolver,
+)
 
 
 # Global thread pool and semaphore for Bedrock calls
@@ -119,16 +122,12 @@ class BedrockService:
         """
         Check if the model is a Claude/Anthropic model.
 
-        Claude models should use InvokeModel API instead of Converse API
-        because InvokeModel supports more features (beta headers, etc.).
-
-        Args:
-            model_id: Model identifier (Anthropic or Bedrock format)
-
-        Returns:
-            True if it's a Claude model
+        Application inference profile ARNs are resolved to their underlying
+        foundation model before keyword matching. Non-ARN IDs and system-
+        defined profiles pass through at zero cost.
         """
-        model_lower = model_id.lower()
+        resolved = get_inference_profile_resolver().resolve(model_id)
+        model_lower = resolved.lower()
         return "anthropic" in model_lower or "claude" in model_lower
 
     def _get_provider_manager(self):
