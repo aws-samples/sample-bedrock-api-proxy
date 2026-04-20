@@ -38,7 +38,7 @@ def test_metadata_gets_resolved_model_for_profile(tracker, monkeypatch):
         output_tokens=5,
     )
 
-    args, kwargs = tracker.table.put_item.call_args
+    _, kwargs = tracker.table.put_item.call_args
     item = kwargs["Item"]
     assert item["model"] == APP_PROFILE_ARN  # unchanged
     assert item["metadata"]["resolved_model"] == UNDERLYING
@@ -59,7 +59,7 @@ def test_metadata_unchanged_for_plain_model(tracker, monkeypatch):
         output_tokens=5,
     )
 
-    args, kwargs = tracker.table.put_item.call_args
+    _, kwargs = tracker.table.put_item.call_args
     item = kwargs["Item"]
     # resolved_model not added because it equals the original model
     assert "resolved_model" not in item["metadata"]
