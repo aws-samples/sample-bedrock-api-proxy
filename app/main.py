@@ -8,11 +8,13 @@ import signal
 import sys
 from contextlib import asynccontextmanager
 
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import health, messages, models
+from app.services.inference_profile_resolver import InferenceProfileResolutionError
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.security_validator import validate_security_config
@@ -336,6 +338,36 @@ async def http_exception_handler(request, exc: HTTPException):
             "error": {
                 "type": "api_error",
                 "message": str(exc.detail),
+            },
+        },
+    )
+
+
+_PROFILE_CLIENT_CODES_400 = {
+    "ValidationException",
+    "ResourceNotFoundException",
+}
+
+
+@app.exception_handler(InferenceProfileResolutionError)
+async def inference_profile_resolution_handler(
+    request, exc: InferenceProfileResolutionError
+):
+    """Map resolver failures to 400 (caller error) or 502 (infra/permission)."""
+    status_code = 502
+    if isinstance(exc.cause, ClientError):
+        code = exc.cause.response.get("Error", {}).get("Code", "")
+        if code in _PROFILE_CLIENT_CODES_400:
+            status_code = 400
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "type": "error",
+            "error": {
+                "type": "inference_profile_resolution_error",
+                "message": (
+                    f"Could not resolve inference profile {exc.arn}: {exc}"
+                ),
             },
         },
     )
