@@ -145,8 +145,17 @@ class Settings(BaseSettings):
             "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
             "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "claude-3-5-haiku-20241022": "us.anthropic.claude-3-5-haiku-20241022-v1:0"
-
+            "claude-3-5-haiku-20241022": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+            # 1M-context aliases — same Bedrock target; the 1M window is
+            # activated by the `anthropic-beta: context-1m-2025-08-07` header
+            # that clients (e.g. Claude Code) attach to the request.
+            "claude-opus-4-7[1m]": "global.anthropic.claude-opus-4-7",
+            "claude-opus-4-6[1m]": "global.anthropic.claude-opus-4-6-v1",
+            "claude-sonnet-4-6[1m]": "global.anthropic.claude-sonnet-4-6",
+            # Non-Claude Bedrock models (identity-mapped).
+            "minimax.minimax-m2.5": "minimax.minimax-m2.5",
+            "zai.glm-5": "zai.glm-5",
+            "moonshotai.kimi-k2.5": "moonshotai.kimi-k2.5",
         },
         alias="DEFAULT_MODEL_MAPPING",
     )
