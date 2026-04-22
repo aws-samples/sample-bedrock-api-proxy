@@ -13,12 +13,15 @@ endpoints remain responsive even when Bedrock API calls experience retries.
 """
 import asyncio
 import json
+import logging
 import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Dict, Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 import boto3
 from botocore.config import Config
@@ -40,6 +43,24 @@ from app.services.inference_profile_resolver import (
 _bedrock_executor: Optional[ThreadPoolExecutor] = None
 _bedrock_semaphore: Optional[asyncio.Semaphore] = None
 _executor_lock = threading.Lock()
+
+
+# Region/scope prefixes that precede the real provider segment in Bedrock IDs.
+_REGION_PREFIXES = frozenset({"global", "us", "eu", "apac", "ca", "sa", "af", "me", "cn"})
+
+
+def _derive_provider(bedrock_model_id: str) -> str:
+    """Extract the provider segment from a Bedrock model ID or inference-profile ARN."""
+    if not bedrock_model_id:
+        return ""
+    tail = bedrock_model_id
+    # Inference-profile ARN: keep everything after the last '/'.
+    if "/" in tail:
+        tail = tail.rsplit("/", 1)[-1]
+    segments = tail.split(".")
+    if segments and segments[0] in _REGION_PREFIXES and len(segments) > 1:
+        return segments[1]
+    return segments[0] if segments else ""
 
 
 def _get_executor() -> ThreadPoolExecutor:
@@ -1587,50 +1608,39 @@ class BedrockService:
 
     def list_available_models(self) -> list[Dict[str, Any]]:
         """
-        List available Bedrock models.
+        List models that this proxy can invoke.
+
+        The list is sourced from `settings.default_model_mapping` merged with
+        the `ModelMappingTable` in DynamoDB. DDB entries override defaults on
+        key conflict, so admin-portal changes take effect without a deploy.
+        If DDB is unreachable, the defaults-only list is returned.
 
         Returns:
-            List of model information dictionaries
+            List of {id, bedrock_model_id, provider, streaming_supported} dicts.
         """
+        merged: Dict[str, str] = dict(settings.default_model_mapping)
+
         try:
-            bedrock_client = boto3.client(
-                "bedrock",
-                region_name=settings.aws_region,
-                endpoint_url=settings.bedrock_endpoint_url,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key,
-                aws_session_token=settings.aws_session_token,
-            )
+            from app.db.dynamodb import DynamoDBClient
 
-            response = bedrock_client.list_foundation_models()
-            models = response.get("modelSummaries", [])
-
-            # Filter to only models that support converse API
-            converse_models = []
-            for model in models:
-                # Check if model supports text generation
-                if "TEXT" in model.get("outputModalities", []):
-                    converse_models.append(
-                        {
-                            "id": model.get("modelId"),
-                            "name": model.get("modelName"),
-                            "provider": model.get("providerName"),
-                            "input_modalities": model.get("inputModalities", []),
-                            "output_modalities": model.get("outputModalities", []),
-                            "streaming_supported": model.get(
-                                "responseStreamingSupported", False
-                            ),
-                        }
-                    )
-
-            return converse_models
-
-        except ClientError as e:
-            error_code = e.response["Error"]["Code"]
-            error_message = e.response["Error"]["Message"]
-            raise Exception(f"Failed to list models [{error_code}]: {error_message}")
+            db = DynamoDBClient()
+            for row in db.model_mapping_manager.list_mappings():
+                a_id = row.get("anthropic_model_id")
+                b_id = row.get("bedrock_model_id")
+                if a_id and b_id:
+                    merged[a_id] = b_id
         except Exception as e:
-            raise Exception(f"Failed to list models: {str(e)}")
+            logger.warning("Failed to load DDB model mappings: %s", e)
+
+        return [
+            {
+                "id": a_id,
+                "bedrock_model_id": b_id,
+                "provider": _derive_provider(b_id),
+                "streaming_supported": True,
+            }
+            for a_id, b_id in merged.items()
+        ]
 
     def get_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
         """
