@@ -21,6 +21,22 @@ def get_bedrock_service() -> BedrockService:
     return BedrockService()
 
 
+def _patch_anthropic_global_prefix(model_id: str) -> str:
+    # Temporary patch: surface `anthropic.*` foundation model IDs as
+    # `global.anthropic.*` cross-region inference profile IDs so clients
+    # can invoke them directly without a manual mapping step.
+    if isinstance(model_id, str) and model_id.startswith("anthropic."):
+        return f"global.{model_id}"
+    return model_id
+
+
+def _apply_anthropic_global_prefix(models: List[dict]) -> List[dict]:
+    for model in models:
+        if "id" in model:
+            model["id"] = _patch_anthropic_global_prefix(model["id"])
+    return models
+
+
 @router.get(
     "/models",
     summary="List available models",
@@ -49,7 +65,7 @@ async def list_models(
                 models = provider_registry.list_all_models()
                 return {
                     "object": "list",
-                    "data": models,
+                    "data": _apply_anthropic_global_prefix(models),
                     "has_more": False,
                 }
 
@@ -57,7 +73,7 @@ async def list_models(
 
         return {
             "object": "list",
-            "data": models,
+            "data": _apply_anthropic_global_prefix(models),
             "has_more": False,
         }
 
@@ -105,6 +121,9 @@ async def get_model(
                     "message": f"Model {model_id} not found",
                 },
             )
+
+        if "id" in model_info:
+            model_info["id"] = _patch_anthropic_global_prefix(model_info["id"])
 
         return {
             "object": "model",
