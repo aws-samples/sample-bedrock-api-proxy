@@ -456,6 +456,30 @@ class OpenAICompatService:
                 )
                 if reasoning_content is not None:
                     if not thinking_block_started:
+                        # Close any other open block before starting a (possibly
+                        # re-entered) thinking block. Handles interleaved-thinking
+                        # models that emit reasoning → content → reasoning → ...
+                        if text_block_started:
+                            block_stop = {
+                                "type": "content_block_stop",
+                                "index": content_index,
+                            }
+                            event_queue.put(
+                                ("event", self._format_sse_event(block_stop))
+                            )
+                            text_block_started = False
+                            content_index += 1
+                        elif current_tool_index >= 0:
+                            block_stop = {
+                                "type": "content_block_stop",
+                                "index": content_index,
+                            }
+                            event_queue.put(
+                                ("event", self._format_sse_event(block_stop))
+                            )
+                            current_tool_index = -1
+                            content_index += 1
+
                         block_start = {
                             "type": "content_block_start",
                             "index": content_index,

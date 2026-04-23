@@ -458,6 +458,93 @@ def test_two_tool_calls_in_a_row_close_cleanly():
     assert [s["content_block"]["id"] for s in tool_starts] == ["call_1", "call_2"]
 
 
+def test_reasoning_after_text_closes_text_block():
+    """Interleaved-thinking: if a model resumes reasoning AFTER emitting text,
+    the open text block must be closed with its own content_block_stop before
+    a new thinking block opens (not collide on the same index)."""
+    events = _run_worker(
+        [
+            _chunk(reasoning="first thought"),
+            _chunk(content="hi"),
+            _chunk(reasoning="more thinking"),  # resume reasoning
+            _chunk(content=" again"),
+            _chunk(finish_reason="stop"),
+            _usage_chunk(),
+        ]
+    )
+
+    assert _types(events) == [
+        "message_start",
+        "start:thinking",
+        "delta:thinking_delta",
+        "delta:signature_delta",
+        "content_block_stop",
+        "start:text",
+        "delta:text_delta",
+        "content_block_stop",
+        "start:thinking",
+        "delta:thinking_delta",
+        "delta:signature_delta",
+        "content_block_stop",
+        "start:text",
+        "delta:text_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+        "__done__",
+    ]
+
+    block_events = [
+        e
+        for e in events
+        if e.get("type") in ("content_block_start", "content_block_stop")
+    ]
+    # Four distinct blocks at indices 0,1,2,3, each with matched start/stop
+    assert [e["index"] for e in block_events] == [0, 0, 1, 1, 2, 2, 3, 3]
+
+
+def test_reasoning_after_tool_use_closes_tool_block():
+    """Interleaved-thinking: resuming reasoning after a tool_use must close
+    the tool_use block first (not leave it dangling)."""
+    events = _run_worker(
+        [
+            _chunk(reasoning="thinking"),
+            _chunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ]
+            ),
+            _chunk(reasoning="more thinking"),  # resume reasoning after tool
+            _chunk(finish_reason="stop"),
+            _usage_chunk(),
+        ]
+    )
+
+    types = _types(events)
+    # Tool block must be closed before second thinking block opens
+    assert types == [
+        "message_start",
+        "start:thinking",
+        "delta:thinking_delta",
+        "delta:signature_delta",
+        "content_block_stop",
+        "start:tool_use",
+        "delta:input_json_delta",
+        "content_block_stop",
+        "start:thinking",
+        "delta:thinking_delta",
+        "delta:signature_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+        "__done__",
+    ]
+
+
 def test_openai_error_mid_stream_yields_error_sentinel_and_no_fallback():
     """If the OpenAI client raises mid-stream, the worker must enqueue
     ('error', ...) and NOT emit a fallback message_stop afterward — the
