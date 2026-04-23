@@ -7,6 +7,7 @@ through Bedrock's OpenAI-compatible endpoint (bedrock-mantle).
 Follows the same ThreadPoolExecutor + asyncio.Semaphore pattern as
 BedrockService for concurrency control and streaming.
 """
+
 import asyncio
 import json
 import queue
@@ -40,7 +41,9 @@ def _get_executor() -> ThreadPoolExecutor:
                     max_workers=settings.bedrock_thread_pool_size,
                     thread_name_prefix="openai-compat",
                 )
-                print(f"[OPENAI-COMPAT] Created thread pool with {settings.bedrock_thread_pool_size} workers")
+                print(
+                    f"[OPENAI-COMPAT] Created thread pool with {settings.bedrock_thread_pool_size} workers"
+                )
     return _openai_executor
 
 
@@ -49,7 +52,9 @@ def _get_semaphore() -> asyncio.Semaphore:
     global _openai_semaphore
     if _openai_semaphore is None:
         _openai_semaphore = asyncio.Semaphore(settings.bedrock_semaphore_size)
-        print(f"[OPENAI-COMPAT] Created semaphore with limit {settings.bedrock_semaphore_size}")
+        print(
+            f"[OPENAI-COMPAT] Created semaphore with limit {settings.bedrock_semaphore_size}"
+        )
     return _openai_semaphore
 
 
@@ -96,7 +101,9 @@ class OpenAICompatService:
         print(f"[OPENAI-COMPAT] Calling Chat Completions API")
         print(f"  - Model: {openai_request.get('model')}")
         print(f"  - Messages count: {len(openai_request.get('messages', []))}")
-        print(f"  - Has system: {openai_request['messages'][0]['role'] == 'system' if openai_request.get('messages') else False}")
+        print(
+            f"  - Has system: {openai_request['messages'][0]['role'] == 'system' if openai_request.get('messages') else False}"
+        )
         print(f"  - Has tools: {bool(openai_request.get('tools'))}")
         print(f"  - Tools count: {len(openai_request.get('tools', []))}")
         print(f"  - max_tokens: {openai_request.get('max_tokens')}")
@@ -109,16 +116,21 @@ class OpenAICompatService:
 
         try:
             response = self.client.chat.completions.create(
-                **openai_request,
-                **({"extra_body": extra_body} if extra_body else {})
+                **openai_request, **({"extra_body": extra_body} if extra_body else {})
             )
             response_dict = response.model_dump()
 
             # Log OpenAI response details
-            choice = response_dict.get("choices", [{}])[0] if response_dict.get("choices") else {}
+            choice = (
+                response_dict.get("choices", [{}])[0]
+                if response_dict.get("choices")
+                else {}
+            )
             msg_dict = choice.get("message", {})
             raw_usage = response_dict.get("usage") or {}
-            reasoning_text = msg_dict.get("reasoning") or msg_dict.get("reasoning_content") or ""
+            reasoning_text = (
+                msg_dict.get("reasoning") or msg_dict.get("reasoning_content") or ""
+            )
             content_text = msg_dict.get("content") or ""
             tool_calls = msg_dict.get("tool_calls") or []
 
@@ -133,10 +145,16 @@ class OpenAICompatService:
             if tool_calls:
                 for i, tc in enumerate(tool_calls):
                     func = tc.get("function", {})
-                    print(f"  - Tool call [{i}]: id={tc.get('id')}, name={func.get('name')}, args_len={len(func.get('arguments', ''))}")
-            print(f"  - Usage: prompt_tokens={raw_usage.get('prompt_tokens', 0)}, completion_tokens={raw_usage.get('completion_tokens', 0)}, total={raw_usage.get('total_tokens', 0)}")
+                    print(
+                        f"  - Tool call [{i}]: id={tc.get('id')}, name={func.get('name')}, args_len={len(func.get('arguments', ''))}"
+                    )
+            print(
+                f"  - Usage: prompt_tokens={raw_usage.get('prompt_tokens', 0)}, completion_tokens={raw_usage.get('completion_tokens', 0)}, total={raw_usage.get('total_tokens', 0)}"
+            )
             if raw_usage.get("completion_tokens_details"):
-                print(f"  - Completion details: {raw_usage['completion_tokens_details']}")
+                print(
+                    f"  - Completion details: {raw_usage['completion_tokens_details']}"
+                )
 
             # Convert to Anthropic format
             anthropic_response = self.response_converter.convert_response(
@@ -154,10 +172,14 @@ class OpenAICompatService:
                 elif block.type == "text":
                     print(f"  - Block [{i}]: text, length={len(block.text)}")
                 elif block.type == "tool_use":
-                    print(f"  - Block [{i}]: tool_use, id={block.id}, name={block.name}")
+                    print(
+                        f"  - Block [{i}]: tool_use, id={block.id}, name={block.name}"
+                    )
                 else:
                     print(f"  - Block [{i}]: {block.type}")
-            print(f"  - Usage: input_tokens={anthropic_response.usage.input_tokens}, output_tokens={anthropic_response.usage.output_tokens}")
+            print(
+                f"  - Usage: input_tokens={anthropic_response.usage.input_tokens}, output_tokens={anthropic_response.usage.output_tokens}"
+            )
 
             return anthropic_response
 
@@ -176,7 +198,7 @@ class OpenAICompatService:
             )
             raise BedrockAPIError(
                 error_code=error_code,
-                error_message=str(e.message) if hasattr(e, 'message') else str(e),
+                error_message=str(e.message) if hasattr(e, "message") else str(e),
                 http_status=e.status_code,
                 error_type=error_type,
             )
@@ -259,11 +281,15 @@ class OpenAICompatService:
                         msg_type, data = event_queue.get_nowait()
 
                         if msg_type == "done":
-                            print(f"[OPENAI-COMPAT STREAM] Stream completed for request {request_id}")
+                            print(
+                                f"[OPENAI-COMPAT STREAM] Stream completed for request {request_id}"
+                            )
                             break
                         elif msg_type == "error":
                             error_code, error_message = data
-                            print(f"[OPENAI-COMPAT STREAM] Error: {error_code}: {error_message}")
+                            print(
+                                f"[OPENAI-COMPAT STREAM] Error: {error_code}: {error_message}"
+                            )
                             error_event = self.response_converter.create_error_event(
                                 error_code, error_message
                             )
@@ -291,8 +317,10 @@ class OpenAICompatService:
                                         yield data
                                     elif msg_type == "error":
                                         error_code, error_message = data
-                                        error_event = self.response_converter.create_error_event(
-                                            error_code, error_message
+                                        error_event = (
+                                            self.response_converter.create_error_event(
+                                                error_code, error_message
+                                            )
                                         )
                                         yield self._format_sse_event(error_event)
                                     elif msg_type == "done":
@@ -305,8 +333,10 @@ class OpenAICompatService:
                                 future.result()
                             except Exception as e:
                                 print(f"[OPENAI-COMPAT STREAM] Thread exception: {e}")
-                                error_event = self.response_converter.create_error_event(
-                                    "internal_error", str(e)
+                                error_event = (
+                                    self.response_converter.create_error_event(
+                                        "internal_error", str(e)
+                                    )
                                 )
                                 yield self._format_sse_event(error_event)
                             break
@@ -314,6 +344,7 @@ class OpenAICompatService:
             except Exception as e:
                 print(f"[OPENAI-COMPAT STREAM] Exception in async consumer: {e}")
                 import traceback
+
                 print(f"[ERROR] Traceback:\n{traceback.format_exc()}")
                 error_event = self.response_converter.create_error_event(
                     "internal_error", str(e)
@@ -348,14 +379,18 @@ class OpenAICompatService:
             print(f"[OPENAI-COMPAT STREAM] Starting stream")
             print(f"  - Model: {openai_request.get('model')}")
             print(f"  - Messages count: {len(openai_request.get('messages', []))}")
-            print(f"  - Has system: {openai_request['messages'][0]['role'] == 'system' if openai_request.get('messages') else False}")
+            print(
+                f"  - Has system: {openai_request['messages'][0]['role'] == 'system' if openai_request.get('messages') else False}"
+            )
             print(f"  - Has tools: {bool(openai_request.get('tools'))}")
             print(f"  - Tools count: {len(openai_request.get('tools', []))}")
             print(f"  - max_tokens: {openai_request.get('max_tokens')}")
             print(f"  - temperature: {openai_request.get('temperature', 'N/A')}")
             print(f"  - top_p: {openai_request.get('top_p', 'N/A')}")
             print(f"  - stop: {openai_request.get('stop', 'N/A')}")
-            print(f"  - reasoning_effort: {openai_request.get('reasoning_effort', 'N/A')}")
+            print(
+                f"  - reasoning_effort: {openai_request.get('reasoning_effort', 'N/A')}"
+            )
             print(f"  - extra_body: {extra_body}")
 
             # Emit message_start event
@@ -369,14 +404,15 @@ class OpenAICompatService:
             text_block_started = False
             current_tool_index = -1
             content_index = 0
-            final_usage: Dict[str, Any] = {}  # Capture usage from the final usage-only chunk
+            final_usage: Dict[str, Any] = (
+                {}
+            )  # Capture usage from the final usage-only chunk
             final_stop_reason = "end_turn"  # Captured from finish_reason chunk
             got_finish_reason = False
 
             # Call OpenAI streaming API
             stream = self.client.chat.completions.create(
-                **openai_request,
-                **({"extra_body": extra_body} if extra_body else {})
+                **openai_request, **({"extra_body": extra_body} if extra_body else {})
             )
 
             chunk_count = 0
@@ -392,11 +428,19 @@ class OpenAICompatService:
                     if stream_usage:
                         final_usage = stream_usage
                         print(f"[OPENAI-COMPAT STREAM] Final usage chunk:")
-                        print(f"  - prompt_tokens: {stream_usage.get('prompt_tokens', 0)}")
-                        print(f"  - completion_tokens: {stream_usage.get('completion_tokens', 0)}")
-                        print(f"  - total_tokens: {stream_usage.get('total_tokens', 0)}")
+                        print(
+                            f"  - prompt_tokens: {stream_usage.get('prompt_tokens', 0)}"
+                        )
+                        print(
+                            f"  - completion_tokens: {stream_usage.get('completion_tokens', 0)}"
+                        )
+                        print(
+                            f"  - total_tokens: {stream_usage.get('total_tokens', 0)}"
+                        )
                         if stream_usage.get("completion_tokens_details"):
-                            print(f"  - completion_details: {stream_usage['completion_tokens_details']}")
+                            print(
+                                f"  - completion_details: {stream_usage['completion_tokens_details']}"
+                            )
                     continue
 
                 chunk_count += 1
@@ -407,7 +451,9 @@ class OpenAICompatService:
 
                 # Handle reasoning content delta (thinking)
                 # Bedrock Mantle uses "reasoning" (not "reasoning_content")
-                reasoning_content = delta.get("reasoning") or delta.get("reasoning_content")
+                reasoning_content = delta.get("reasoning") or delta.get(
+                    "reasoning_content"
+                )
                 if reasoning_content is not None:
                     if not thinking_block_started:
                         block_start = {
@@ -421,7 +467,10 @@ class OpenAICompatService:
                     thinking_delta = {
                         "type": "content_block_delta",
                         "index": content_index,
-                        "delta": {"type": "thinking_delta", "thinking": reasoning_content},
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": reasoning_content,
+                        },
                     }
                     event_queue.put(("event", self._format_sse_event(thinking_delta)))
 
@@ -433,11 +482,7 @@ class OpenAICompatService:
                     if not text_block_started:
                         # Close open thinking block before starting text
                         if thinking_block_started:
-                            block_stop = {
-                                "type": "content_block_stop",
-                                "index": content_index,
-                            }
-                            event_queue.put(("event", self._format_sse_event(block_stop)))
+                            self._close_thinking_block(event_queue, content_index)
                             content_index += 1
                             thinking_block_started = False
 
@@ -447,7 +492,9 @@ class OpenAICompatService:
                                 "type": "content_block_stop",
                                 "index": content_index,
                             }
-                            event_queue.put(("event", self._format_sse_event(block_stop)))
+                            event_queue.put(
+                                ("event", self._format_sse_event(block_stop))
+                            )
                             content_index += 1
                             current_tool_index = -1
 
@@ -476,17 +523,28 @@ class OpenAICompatService:
                         func = tc.get("function", {})
 
                         # Debug: log raw tool call chunk
-                        print(f"[OPENAI-COMPAT STREAM] Raw tool_call chunk: id={tc_id}, func_name={func.get('name')}, args_len={len(func.get('arguments', '') or '')}")
+                        print(
+                            f"[OPENAI-COMPAT STREAM] Raw tool_call chunk: id={tc_id}, func_name={func.get('name')}, args_len={len(func.get('arguments', '') or '')}"
+                        )
 
                         # New tool call (has an id)
                         if tc_id:
+                            # Close open thinking block before starting tool_use
+                            # (model went reasoning → tool_call with no intermediate text)
+                            if thinking_block_started:
+                                self._close_thinking_block(event_queue, content_index)
+                                content_index += 1
+                                thinking_block_started = False
+
                             # Close text block if open
                             if text_block_started:
                                 block_stop = {
                                     "type": "content_block_stop",
                                     "index": content_index,
                                 }
-                                event_queue.put(("event", self._format_sse_event(block_stop)))
+                                event_queue.put(
+                                    ("event", self._format_sse_event(block_stop))
+                                )
                                 text_block_started = False
                                 content_index += 1
 
@@ -496,14 +554,18 @@ class OpenAICompatService:
                                     "type": "content_block_stop",
                                     "index": content_index,
                                 }
-                                event_queue.put(("event", self._format_sse_event(block_stop)))
+                                event_queue.put(
+                                    ("event", self._format_sse_event(block_stop))
+                                )
                                 content_index += 1
 
                             current_tool_index = tc.get("index", current_tool_index + 1)
 
                             # Start tool_use block
                             tool_name = func.get("name", "")
-                            print(f"[OPENAI-COMPAT STREAM] Starting tool_use block: index={content_index}, id={tc_id}, name={tool_name}")
+                            print(
+                                f"[OPENAI-COMPAT STREAM] Starting tool_use block: index={content_index}, id={tc_id}, name={tool_name}"
+                            )
                             block_start = {
                                 "type": "content_block_start",
                                 "index": content_index,
@@ -514,7 +576,9 @@ class OpenAICompatService:
                                     "input": {},
                                 },
                             }
-                            event_queue.put(("event", self._format_sse_event(block_start)))
+                            event_queue.put(
+                                ("event", self._format_sse_event(block_start))
+                            )
 
                         # Tool call arguments delta
                         arguments = func.get("arguments")
@@ -527,7 +591,9 @@ class OpenAICompatService:
                                     "partial_json": arguments,
                                 },
                             }
-                            event_queue.put(("event", self._format_sse_event(input_delta)))
+                            event_queue.put(
+                                ("event", self._format_sse_event(input_delta))
+                            )
 
                 # Handle finish reason
                 if finish_reason:
@@ -536,14 +602,21 @@ class OpenAICompatService:
                     print(f"  - Chunks received: {chunk_count}")
                     print(f"  - Total text length: {total_text_len}")
                     print(f"  - Content blocks: {content_index + 1}")
-                    print(f"  - Tool calls: {current_tool_index + 1 if current_tool_index >= 0 else 0}")
+                    print(
+                        f"  - Tool calls: {current_tool_index + 1 if current_tool_index >= 0 else 0}"
+                    )
                     # Close any open content blocks
-                    if thinking_block_started or text_block_started or current_tool_index >= 0:
+                    if thinking_block_started:
+                        self._close_thinking_block(event_queue, content_index)
+                        thinking_block_started = False
+                    elif text_block_started or current_tool_index >= 0:
                         block_stop = {
                             "type": "content_block_stop",
                             "index": content_index,
                         }
                         event_queue.put(("event", self._format_sse_event(block_stop)))
+                        text_block_started = False
+                        current_tool_index = -1
 
                     # Map and save stop reason — message_delta deferred until after loop
                     # so we can include usage from the final usage-only chunk
@@ -552,22 +625,40 @@ class OpenAICompatService:
                         finish_reason, "end_turn"
                     )
 
-            # Emit message_delta and message_stop only if we got a proper finish
-            if got_finish_reason:
-                # Usage comes from the final usage-only chunk (after finish_reason)
-                message_delta = {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": final_stop_reason, "stop_sequence": None},
-                    "usage": {
-                        "input_tokens": final_usage.get("prompt_tokens", 0),
-                        "output_tokens": final_usage.get("completion_tokens", 0),
-                    },
-                }
-                event_queue.put(("event", self._format_sse_event(message_delta)))
+            # Fallback: if upstream ended without finish_reason, still close any
+            # open block and emit message_delta/message_stop so clients see a
+            # well-formed terminator and don't hang waiting.
+            if not got_finish_reason:
+                print(
+                    f"[OPENAI-COMPAT STREAM] Stream ended without finish_reason; "
+                    f"emitting fallback message_stop (chunks={chunk_count})"
+                )
+                if thinking_block_started:
+                    self._close_thinking_block(event_queue, content_index)
+                    thinking_block_started = False
+                elif text_block_started or current_tool_index >= 0:
+                    block_stop = {
+                        "type": "content_block_stop",
+                        "index": content_index,
+                    }
+                    event_queue.put(("event", self._format_sse_event(block_stop)))
+                    text_block_started = False
+                    current_tool_index = -1
 
-                # Emit message_stop
-                message_stop = self.response_converter.create_message_stop_event()
-                event_queue.put(("event", self._format_sse_event(message_stop)))
+            # Always emit message_delta + message_stop so the SSE stream has a
+            # proper Anthropic-format terminator.
+            message_delta = {
+                "type": "message_delta",
+                "delta": {"stop_reason": final_stop_reason, "stop_sequence": None},
+                "usage": {
+                    "input_tokens": final_usage.get("prompt_tokens", 0),
+                    "output_tokens": final_usage.get("completion_tokens", 0),
+                },
+            }
+            event_queue.put(("event", self._format_sse_event(message_delta)))
+
+            message_stop = self.response_converter.create_message_stop_event()
+            event_queue.put(("event", self._format_sse_event(message_stop)))
 
             event_queue.put(("done", None))
 
@@ -578,6 +669,7 @@ class OpenAICompatService:
         except Exception as e:
             print(f"[OPENAI-COMPAT STREAM] Unexpected error: {e}")
             import traceback
+
             print(f"[ERROR] Traceback:\n{traceback.format_exc()}")
             event_queue.put(("error", ("internal_error", str(e))))
 
@@ -593,3 +685,29 @@ class OpenAICompatService:
         event_type = event.get("type", "unknown")
         event_data = json.dumps(event)
         return f"event: {event_type}\ndata: {event_data}\n\n"
+
+    def _close_thinking_block(self, event_queue: queue.Queue, index: int) -> None:
+        """Close an open thinking content block.
+
+        Emits signature_delta (with empty signature — non-Claude models via
+        Bedrock Mantle don't produce cryptographic thinking signatures) then
+        content_block_stop. Matches Anthropic's native thinking event sequence
+        so Anthropic SDK clients see a well-formed stream.
+
+        Note: the empty signature is safe here because the resulting thinking
+        block is never replayed to a Claude model — on multi-turn calls it
+        goes back to the same non-Claude model via Bedrock Mantle, which does
+        not verify thinking signatures.
+        """
+        signature_delta = {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "signature_delta", "signature": ""},
+        }
+        event_queue.put(("event", self._format_sse_event(signature_delta)))
+
+        block_stop = {
+            "type": "content_block_stop",
+            "index": index,
+        }
+        event_queue.put(("event", self._format_sse_event(block_stop)))
