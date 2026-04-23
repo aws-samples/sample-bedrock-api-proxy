@@ -58,7 +58,7 @@ export default function Login() {
     }
 
     // Validate password requirements
-    if (newPassword.length < 10) {
+    if (newPassword.length < 12) {
       setPasswordError(t('auth.passwordTooShort'));
       return;
     }
@@ -91,7 +91,7 @@ export default function Login() {
     }
 
     // Validate password requirements
-    if (resetNewPassword.length < 10) {
+    if (resetNewPassword.length < 12) {
       setPasswordError(t('auth.passwordTooShort'));
       return;
     }
@@ -202,7 +202,7 @@ export default function Login() {
                   <ul className="text-gray-400 text-xs space-y-1">
                     <li className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-[14px]">check_circle</span>
-                      {t('auth.passwordMin10')}
+                      {t('auth.passwordMin12')}
                     </li>
                     <li className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-[14px]">check_circle</span>
@@ -231,7 +231,7 @@ export default function Login() {
                       className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg text-white placeholder:text-gray-600 focus:outline-0 focus:ring-2 focus:ring-primary/50 border border-border-dark bg-input-bg focus:border-primary h-12 pl-11 pr-12 text-base font-normal leading-normal transition-all duration-200"
                       placeholder={t('auth.newPasswordPlaceholder')}
                       required
-                      minLength={10}
+                      minLength={12}
                     />
                     <button
                       type="button"
@@ -261,7 +261,7 @@ export default function Login() {
                       className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg text-white placeholder:text-gray-600 focus:outline-0 focus:ring-2 focus:ring-primary/50 border border-border-dark bg-input-bg focus:border-primary h-12 pl-11 pr-12 text-base font-normal leading-normal transition-all duration-200"
                       placeholder={t('auth.confirmPasswordPlaceholder')}
                       required
-                      minLength={10}
+                      minLength={12}
                     />
                   </div>
                 </label>
@@ -347,7 +347,7 @@ export default function Login() {
                       <ul className="text-gray-400 text-xs space-y-1">
                         <li className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-[14px]">check_circle</span>
-                          {t('auth.passwordMin10')}
+                          {t('auth.passwordMin12')}
                         </li>
                         <li className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-[14px]">check_circle</span>
@@ -376,7 +376,7 @@ export default function Login() {
                           className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg text-white placeholder:text-gray-600 focus:outline-0 focus:ring-2 focus:ring-primary/50 border border-border-dark bg-input-bg focus:border-primary h-12 pl-11 pr-12 text-base font-normal leading-normal transition-all duration-200"
                           placeholder={t('auth.newPasswordPlaceholder')}
                           required
-                          minLength={10}
+                          minLength={12}
                         />
                         <button
                           type="button"
@@ -406,7 +406,7 @@ export default function Login() {
                           className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg text-white placeholder:text-gray-600 focus:outline-0 focus:ring-2 focus:ring-primary/50 border border-border-dark bg-input-bg focus:border-primary h-12 pl-11 pr-12 text-base font-normal leading-normal transition-all duration-200"
                           placeholder={t('auth.confirmPasswordPlaceholder')}
                           required
-                          minLength={10}
+                          minLength={12}
                         />
                       </div>
                     </label>
