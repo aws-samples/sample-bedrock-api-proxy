@@ -510,13 +510,9 @@ class BedrockService:
         if request.metadata:
             native_request["metadata"] = request.metadata.model_dump() if hasattr(request.metadata, "model_dump") else request.metadata
 
-        # Add output_config if present (e.g., effort level)
-        if request.output_config:
-            native_request["output_config"] = request.output_config
+        # output_config (effort level) is not supported by Bedrock — drop it
 
-        # Add context_management if present (e.g., compact-2026-01-12 beta)
-        if request.context_management:
-            native_request["context_management"] = request.context_management
+        # context_management (compact-2026-01-12 beta) is not supported by Bedrock — drop it
 
         # Auto-inject advanced-tool-use beta header if tools contain defer_loading
         # but the client didn't send the required beta header.
