@@ -554,8 +554,8 @@ class BedrockService:
                     bedrock_beta.extend(mapped)
                     print(f"[BEDROCK NATIVE] Mapped beta header '{beta_value}' → {mapped}")
                 else:
-                    bedrock_beta.append(beta_value)
-                    print(f"[BEDROCK NATIVE] Passing through beta header: {beta_value}")
+                    # Drop unknown beta flags — Bedrock rejects unrecognized Anthropic-specific values
+                    print(f"[BEDROCK NATIVE] Dropping unknown beta header (not supported by Bedrock): {beta_value}")
 
         if bedrock_beta:
             native_request["anthropic_beta"] = bedrock_beta

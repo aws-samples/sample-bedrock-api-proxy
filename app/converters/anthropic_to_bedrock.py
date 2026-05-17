@@ -141,7 +141,7 @@ class AnthropicToBedrockConverter:
                     additional_fields.update(thinking_config)
 
         # Add anthropic_beta features for Claude models (from client-provided headers)
-        # Rules loaded from DynamoDB (blocklist → filter, mapping → translate, else → passthrough)
+        # Rules loaded from DynamoDB (blocklist → filter, mapping → translate, else → drop)
         if self._is_claude_model() and anthropic_beta:
             from app.db.beta_header_cache import BetaHeaderConfigCache
             cache = BetaHeaderConfigCache.instance()
@@ -159,8 +159,8 @@ class AnthropicToBedrockConverter:
                     bedrock_beta.extend(mapped)
                     print(f"[CONVERTER] Mapped beta header '{beta_value}' → {mapped}")
                 else:
-                    bedrock_beta.append(beta_value)
-                    print(f"[CONVERTER] Passing through beta header: {beta_value}")
+                    # Drop unknown beta flags — Bedrock rejects unrecognized Anthropic-specific values
+                    print(f"[CONVERTER] Dropping unknown beta header (not supported by Bedrock): {beta_value}")
 
             if bedrock_beta:
                 additional_fields["anthropic_beta"] = bedrock_beta

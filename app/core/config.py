@@ -222,7 +222,13 @@ class Settings(BaseSettings):
         default=[
             "prompt-caching-scope-2026-01-05",
             "redact-thinking-2026-02-12",
-            "advisor-tool-2026-03-01"
+            "advisor-tool-2026-03-01",
+            # Claude Code client headers — Anthropic-specific, not supported by Bedrock
+            "claude-code-20250219",
+            "context-1m-2025-08-07",
+            "interleaved-thinking-2025-05-14",
+            "context-management-2025-06-27",
+            "effort-2025-11-24",
         ],
         alias="BETA_HEADERS_BLOCKLIST",
         description="Beta headers that should NOT be passed to Bedrock (unsupported)",
