@@ -4,15 +4,16 @@ Converter from AWS Bedrock Converse API format to Anthropic Messages API format.
 Handles conversion of responses, including content blocks, tool use,
 usage statistics, and streaming events.
 """
+
 import base64
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, cast
 from uuid import uuid4
 
 from app.schemas.anthropic import (
     ContentBlock,
+    Base64ImageSource,
     ImageContent,
-    ImageSource,
     MessageResponse,
     RedactedThinkingContent,
     TextContent,
@@ -72,7 +73,7 @@ class BedrockToAnthropicConverter:
 
         print(f"[CONVERTER] Anthropic converted content blocks:")
         for i, block in enumerate(content):
-            if hasattr(block, 'type'):
+            if hasattr(block, "type"):
                 if block.type == "text":
                     text_preview = block.text[:100] if block.text else "(empty)"
                     print(f"  [{i}] text: {text_preview}")
@@ -87,8 +88,12 @@ class BedrockToAnthropicConverter:
         # Convert stop reason
         stop_reason = self._convert_stop_reason(bedrock_response.get("stopReason"))
 
-        print(f"[CONVERTER] Stop reason: {bedrock_response.get('stopReason')} -> {stop_reason}")
-        print(f"[CONVERTER] Usage: input={usage.input_tokens}, output={usage.output_tokens}")
+        print(
+            f"[CONVERTER] Stop reason: {bedrock_response.get('stopReason')} -> {stop_reason}"
+        )
+        print(
+            f"[CONVERTER] Usage: input={usage.input_tokens}, output={usage.output_tokens}"
+        )
         print(f"[CONVERTER] Final content blocks count: {len(content)}\n")
 
         # Generate message ID if not provided
@@ -153,9 +158,14 @@ class BedrockToAnthropicConverter:
                 anthropic_content.append(
                     ImageContent(
                         type="image",
-                        source=ImageSource(
+                        source=Base64ImageSource(
                             type="base64",
-                            media_type=media_type,
+                            media_type=cast(
+                                Literal[
+                                    "image/jpeg", "image/png", "image/gif", "image/webp"
+                                ],
+                                media_type,
+                            ),
                             data=image_base64,
                         ),
                     )
@@ -492,9 +502,7 @@ class BedrockToAnthropicConverter:
         # Update message_start event with input tokens
         for event in events:
             if event.get("type") == "message_start":
-                event["message"]["usage"]["input_tokens"] = usage.get(
-                    "inputTokens", 0
-                )
+                event["message"]["usage"]["input_tokens"] = usage.get("inputTokens", 0)
 
             # Update message_delta event with output tokens
             elif event.get("type") == "message_delta":

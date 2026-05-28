@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.schemas.anthropic import (
+    Base64ImageSource,
     ImageContent,
     MessageRequest,
     SystemMessage,
@@ -189,9 +190,14 @@ class AnthropicToOpenAIConverter:
                 if isinstance(source, dict):
                     media_type = source.get("media_type", "image/png")
                     data = source.get("data", "")
-                else:
+                elif isinstance(source, Base64ImageSource):
                     media_type = source.media_type
                     data = source.data
+                else:
+                    raise ValueError(
+                        "image source was not resolved to base64 before converter ran "
+                        "(call resolve_image_urls() on inbound requests)"
+                    )
                 data_url = f"data:{media_type};base64,{data}"
                 content_parts.append({
                     "type": "image_url",

@@ -248,6 +248,39 @@ Same agentic loop pattern as web search. Proxy intercepts web_fetch tool calls, 
 
 ---
 
+## Image URL Sources
+
+Image content blocks on `/v1/messages` accept Anthropic's URL source shape in addition to base64. The proxy fetches the URL, base64-encodes the bytes, and forwards to Bedrock as it does today for inline images.
+
+### Request shape
+
+```json
+{
+  "type": "image",
+  "source": { "type": "url", "url": "https://example.com/photo.png" }
+}
+```
+
+`media_type` is optional on URL sources. Resolution priority: explicit `media_type` field → `Content-Type` header → magic-byte sniff (PNG/JPEG/GIF/WEBP).
+
+### How it Works
+
+`app/services/image_url_fetcher.py` walks each request's messages, fetches every URL source concurrently via `httpx` + `asyncio.gather`, and replaces each block's `source` with a `Base64ImageSource` in place. Pre-resolution happens in the `/v1/messages` and `/v1/messages/count_tokens` handlers before the converter runs, so the existing Anthropic→Bedrock pipeline is unchanged.
+
+No SSRF allowlist or private-IP blocking — operators are expected to control outbound reachability via firewall/VPC policy. The fetcher only enforces scheme (`http`/`https`), timeout, size cap, and supported content type.
+
+### Configuration
+
+- `IMAGE_URL_FETCH_TIMEOUT_S=30.0` - Per-URL fetch timeout in seconds
+- `IMAGE_URL_FETCH_MAX_BYTES=20971520` - Max bytes per image (default 20 MB). Bedrock applies its own stricter per-model limits downstream.
+
+### Key Files
+
+- `app/services/image_url_fetcher.py` - Fetcher and resolver
+- `app/schemas/anthropic.py` - `Base64ImageSource` / `UrlImageSource` discriminated union
+
+---
+
 ## Beta Header Mapping and Tool Input Examples
 
 ### Beta Header Mapping

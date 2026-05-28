@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from app.core.config import settings
 from app.schemas.anthropic import (
+    Base64ImageSource,
     ContentBlock,
     ImageContent,
     DocumentContent,
@@ -418,10 +419,19 @@ class AnthropicToBedrockConverter:
                     print(f"[CONVERTER] Added cachePoint after text block")
 
             elif isinstance(block, ImageContent):
+                # Image URLs must be pre-resolved by resolve_image_urls() in the
+                # API handler. Defense in depth: any code path that reaches the
+                # converter without resolving gets a clean error here.
+                source = block.source
+                if not isinstance(source, Base64ImageSource):
+                    raise ValueError(
+                        "image source was not resolved to base64 before converter ran "
+                        "(call resolve_image_urls() on inbound requests)"
+                    )
                 # Convert base64 image to bytes
-                image_bytes = base64.b64decode(block.source.data)
+                image_bytes = base64.b64decode(source.data)
                 # Extract format from media_type (e.g., "image/png" -> "png")
-                image_format = block.source.media_type.split("/")[-1]
+                image_format = source.media_type.split("/")[-1]
 
                 bedrock_content.append({
                     "image": {

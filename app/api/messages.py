@@ -25,6 +25,7 @@ from app.schemas.anthropic import (
     MessageResponse,
 )
 from app.services.bedrock_service import BedrockService
+from app.services.image_url_fetcher import ImageUrlFetchError, resolve_image_urls
 from app.services.ptc_service import PTCService, get_ptc_service
 from app.services.ptc import DockerNotAvailableError, SandboxError, ToolCallRequest, ExecutionResult
 from app.services.standalone_code_execution_service import (
@@ -293,6 +294,19 @@ async def create_message(
         HTTPException: For various error conditions
     """
     request_id = f"msg-{uuid4().hex}"
+
+    # Resolve any image URL sources (download + base64) before downstream processing.
+    # Mutates request_data.messages in place; raises ImageUrlFetchError on any failure.
+    try:
+        await resolve_image_urls(request_data.messages)
+    except ImageUrlFetchError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(e)},
+            },
+        )
 
     # Extract provider_id from API key info for multi-provider Bedrock routing
     provider_id = api_key_info.get("provider_id") if api_key_info else None

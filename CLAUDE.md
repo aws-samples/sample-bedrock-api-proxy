@@ -99,6 +99,7 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 - **Programmatic Tool Calling (PTC)**: Docker sandbox code execution with client-side tool calls. Requires Docker + EC2 launch type on ECS.
 - **Web Search**: Proxy-side `web_search_20250305`/`web_search_20260209` via Tavily or Brave. Agentic loop (up to 25 iterations).
 - **Web Fetch**: Proxy-side `web_fetch_20250910`/`web_fetch_20260209` via httpx (no API key needed).
+- **Image URL Sources**: `ImageContent.source` accepts `type: "url"` (Anthropic-native shape). Proxy fetches concurrently via httpx and replaces with base64 before forwarding to Bedrock. Configurable timeout/size cap; no allowlist (relies on network policy).
 - **Beta Header Mapping**: Maps Anthropic beta headers → Bedrock beta headers for supported models.
 - **Tool Input Examples**: `input_examples` param on tool definitions, passed via `additionalModelRequestFields`.
 - **Cache TTL**: Extends `cache_control` with configurable TTL (5m or 1h). Priority: API key → request → env → default.

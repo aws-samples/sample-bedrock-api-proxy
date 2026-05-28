@@ -400,6 +400,18 @@ class Settings(BaseSettings):
         description="Default maximum content tokens per fetch"
     )
 
+    # Image URL fetching (for ImageContent with source.type="url")
+    image_url_fetch_timeout_s: float = Field(
+        default=30.0,
+        alias="IMAGE_URL_FETCH_TIMEOUT_S",
+        description="Timeout in seconds when fetching image URL sources"
+    )
+    image_url_fetch_max_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        alias="IMAGE_URL_FETCH_MAX_BYTES",
+        description="Maximum bytes to download per image URL (Bedrock applies its own stricter limits downstream)"
+    )
+
     # === OpenAI-Compatible API Settings (Bedrock Mantle) ===
     # When enabled, non-Claude models use OpenAI Chat Completions API via bedrock-mantle
     # instead of Bedrock Converse API. Claude models still use InvokeModel API.

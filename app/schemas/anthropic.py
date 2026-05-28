@@ -4,8 +4,9 @@ Pydantic models for Anthropic Messages API format.
 These models represent the request and response structures for the Anthropic API,
 enabling validation, serialization, and documentation.
 """
-from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, Discriminator, Field, Tag, field_validator
 
 from app.schemas.web_search import WebSearchToolResultContent
 from app.schemas.web_fetch import WebFetchToolResultContent
@@ -14,6 +15,7 @@ from app.schemas.web_fetch import WebFetchToolResultContent
 # Content Block Types
 class TextContent(BaseModel):
     """Text content block."""
+
     type: Literal["text"] = "text"
     text: str
     citations: Optional[List[Any]] = None
@@ -27,15 +29,43 @@ class TextContent(BaseModel):
         return d
 
 
-class ImageSource(BaseModel):
-    """Image source data."""
+class Base64ImageSource(BaseModel):
+    """Base64-encoded image source."""
+
     type: Literal["base64"] = "base64"
     media_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
     data: str  # base64 encoded
 
 
+class UrlImageSource(BaseModel):
+    """URL image source. The proxy fetches and resolves to bytes before forwarding to Bedrock."""
+
+    type: Literal["url"] = "url"
+    url: str
+    media_type: Optional[
+        Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+    ] = None
+
+
+def _image_source_discriminator(v: Any) -> str:
+    """Default to 'base64' when source.type is omitted (preserves pre-union behavior)."""
+    if isinstance(v, dict):
+        return v.get("type") or "base64"
+    return getattr(v, "type", "base64")
+
+
+ImageSource = Annotated[
+    Union[
+        Annotated[Base64ImageSource, Tag("base64")],
+        Annotated[UrlImageSource, Tag("url")],
+    ],
+    Discriminator(_image_source_discriminator),
+]
+
+
 class ImageContent(BaseModel):
     """Image content block."""
+
     type: Literal["image"] = "image"
     source: ImageSource
     cache_control: Optional["CacheControl"] = None
@@ -43,6 +73,7 @@ class ImageContent(BaseModel):
 
 class DocumentSource(BaseModel):
     """Document source data."""
+
     type: Literal["base64"] = "base64"
     media_type: Literal["application/pdf"]
     data: str  # base64 encoded
@@ -50,6 +81,7 @@ class DocumentSource(BaseModel):
 
 class DocumentContent(BaseModel):
     """Document content block (PDF support)."""
+
     type: Literal["document"] = "document"
     source: DocumentSource
     cache_control: Optional["CacheControl"] = None
@@ -57,6 +89,7 @@ class DocumentContent(BaseModel):
 
 class ThinkingContent(BaseModel):
     """Extended thinking content block."""
+
     type: Literal["thinking"] = "thinking"
     thinking: str
     signature: Optional[str] = None
@@ -64,30 +97,35 @@ class ThinkingContent(BaseModel):
 
 class RedactedThinkingContent(BaseModel):
     """Redacted thinking content block (when thinking is hidden for safety/policy reasons)."""
+
     type: Literal["redacted_thinking"] = "redacted_thinking"
     data: str  # Base64 encoded redacted data
 
 
 class CompactionContent(BaseModel):
     """Compaction content block returned when context compaction is triggered."""
+
     type: Literal["compaction"] = "compaction"
     content: Optional[str] = None
 
 
 class ToolReferenceContent(BaseModel):
     """Tool reference content block used in tool_result to reference available tools."""
+
     type: Literal["tool_reference"] = "tool_reference"
     tool_name: str
 
 
 class CallerInfo(BaseModel):
     """Information about who invoked a tool (for PTC)."""
+
     type: Literal["direct", "code_execution_20250825"]
     tool_id: Optional[str] = None
 
 
 class ToolUseContent(BaseModel):
     """Tool use content block in assistant messages."""
+
     type: Literal["tool_use"] = "tool_use"
     id: str
     name: str
@@ -97,6 +135,7 @@ class ToolUseContent(BaseModel):
 
 class ServerToolUseContent(BaseModel):
     """Server tool use content block (e.g., code_execution for PTC)."""
+
     type: Literal["server_tool_use"] = "server_tool_use"
     id: str
     name: str
@@ -105,6 +144,7 @@ class ServerToolUseContent(BaseModel):
 
 class CodeExecutionResultContent(BaseModel):
     """Content block for code execution result (PTC)."""
+
     type: Literal["code_execution_result"] = "code_execution_result"
     stdout: str = ""
     stderr: str = ""
@@ -113,12 +153,14 @@ class CodeExecutionResultContent(BaseModel):
 
 # ==================== Standalone Code Execution Result Types ====================
 
+
 class BashCodeExecutionResult(BaseModel):
     """
     Result from bash code execution in standalone code execution.
 
     Contains stdout, stderr, and return_code from executing a bash command.
     """
+
     type: Literal["bash_code_execution_result"] = "bash_code_execution_result"
     stdout: str = ""
     stderr: str = ""
@@ -135,7 +177,10 @@ class TextEditorCodeExecutionResult(BaseModel):
     - str_replace: old_start, old_lines, new_start, new_lines, lines (diff)
     - errors: error_code
     """
-    type: Literal["text_editor_code_execution_result"] = "text_editor_code_execution_result"
+
+    type: Literal["text_editor_code_execution_result"] = (
+        "text_editor_code_execution_result"
+    )
     # For 'view' command
     file_type: Optional[str] = None  # "text"
     content: Optional[str] = None
@@ -162,6 +207,7 @@ class BashCodeExecutionToolResult(BaseModel):
 
     Returned as a content block in the response.
     """
+
     type: Literal["bash_code_execution_tool_result"] = "bash_code_execution_tool_result"
     tool_use_id: str
     content: BashCodeExecutionResult
@@ -173,22 +219,34 @@ class TextEditorCodeExecutionToolResult(BaseModel):
 
     Returned as a content block in the response.
     """
-    type: Literal["text_editor_code_execution_tool_result"] = "text_editor_code_execution_tool_result"
+
+    type: Literal["text_editor_code_execution_tool_result"] = (
+        "text_editor_code_execution_tool_result"
+    )
     tool_use_id: str
     content: TextEditorCodeExecutionResult
 
 
 # ==================== Server Tool Result (supports both PTC and Standalone) ====================
 
+
 class ServerToolResultContent(BaseModel):
     """Server tool result content block (result of server_tool_use like code_execution)."""
+
     type: Literal["server_tool_result"] = "server_tool_result"
     tool_use_id: str
-    content: List[Union[CodeExecutionResultContent, BashCodeExecutionResult, TextEditorCodeExecutionResult]]
+    content: List[
+        Union[
+            CodeExecutionResultContent,
+            BashCodeExecutionResult,
+            TextEditorCodeExecutionResult,
+        ]
+    ]
 
 
 class ToolResultContent(BaseModel):
     """Tool result content block in user messages."""
+
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str
     content: Union[str, List[Union[TextContent, ImageContent, ToolReferenceContent]]]
@@ -221,6 +279,7 @@ ContentBlock = Union[
 # Cache Control
 class CacheControl(BaseModel):
     """Cache control for prompt caching."""
+
     type: Literal["ephemeral"] = "ephemeral"
     ttl: Optional[Literal["5m", "1h"]] = None
     scope: Optional[str] = None
@@ -229,6 +288,7 @@ class CacheControl(BaseModel):
 # Message Structure
 class Message(BaseModel):
     """Message in the conversation."""
+
     role: Literal["user", "assistant"]
     content: Union[str, List[ContentBlock]]
 
@@ -244,6 +304,7 @@ class Message(BaseModel):
 # Tool Definition
 class ToolInputSchema(BaseModel):
     """JSON schema for tool input."""
+
     type: Literal["object"] = "object"
     properties: Dict[str, Any] = Field(default_factory=dict)
     required: Optional[List[str]] = None
@@ -251,6 +312,7 @@ class ToolInputSchema(BaseModel):
 
 class Tool(BaseModel):
     """Tool definition for function calling."""
+
     name: str
     description: str
     input_schema: ToolInputSchema
@@ -265,6 +327,7 @@ class Tool(BaseModel):
 
 class CodeExecutionTool(BaseModel):
     """Code execution tool for Programmatic Tool Calling."""
+
     type: Literal["code_execution_20250825"] = "code_execution_20250825"
     name: Literal["code_execution"] = "code_execution"
 
@@ -272,6 +335,7 @@ class CodeExecutionTool(BaseModel):
 # System Message with Cache Control
 class SystemMessage(BaseModel):
     """System message with optional cache control."""
+
     type: Literal["text"] = "text"
     text: str
     cache_control: Optional[CacheControl] = None
@@ -280,12 +344,14 @@ class SystemMessage(BaseModel):
 # Metadata
 class Metadata(BaseModel):
     """Request metadata."""
+
     user_id: Optional[str] = None
 
 
 # Request Models
 class MessageRequest(BaseModel):
     """Anthropic Messages API request."""
+
     model: str
     messages: List[Message]
     max_tokens: int = Field(default=4096, ge=1)
@@ -300,10 +366,12 @@ class MessageRequest(BaseModel):
 
     # Tool use (supports both Tool and CodeExecutionTool for PTC)
     tools: Optional[List[Any]] = None  # Can include Tool or CodeExecutionTool
-    tool_choice: Optional[Union[
-        Literal["auto", "any"],
-        Dict[str, str]  # {"type": "tool", "name": "tool_name"}
-    ]] = None
+    tool_choice: Optional[
+        Union[
+            Literal["auto", "any"],
+            Dict[str, str],  # {"type": "tool", "name": "tool_name"}
+        ]
+    ] = None
 
     # Extended thinking
     thinking: Optional[Dict[str, Any]] = None
@@ -332,6 +400,7 @@ class MessageRequest(BaseModel):
 # Response Models
 class Usage(BaseModel):
     """Token usage statistics."""
+
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: Optional[int] = None
@@ -342,14 +411,22 @@ class Usage(BaseModel):
 
 class MessageResponse(BaseModel):
     """Anthropic Messages API response (non-streaming)."""
+
     id: str
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
     content: List[ContentBlock]
     model: str
-    stop_reason: Optional[Literal[
-        "end_turn", "max_tokens", "stop_sequence", "tool_use", "compaction", "pause_turn"
-    ]] = None
+    stop_reason: Optional[
+        Literal[
+            "end_turn",
+            "max_tokens",
+            "stop_sequence",
+            "tool_use",
+            "compaction",
+            "pause_turn",
+        ]
+    ] = None
     stop_sequence: Optional[str] = None
     usage: Usage
 
@@ -357,12 +434,14 @@ class MessageResponse(BaseModel):
 # Streaming Event Models
 class MessageStartEvent(BaseModel):
     """Stream event: message_start."""
+
     type: Literal["message_start"] = "message_start"
     message: Dict[str, Any]  # Partial message with id, type, role, model, usage
 
 
 class ContentBlockStartEvent(BaseModel):
     """Stream event: content_block_start."""
+
     type: Literal["content_block_start"] = "content_block_start"
     index: int
     content_block: Dict[str, Any]  # Partial content block with type and initial fields
@@ -370,6 +449,7 @@ class ContentBlockStartEvent(BaseModel):
 
 class ContentBlockDeltaEvent(BaseModel):
     """Stream event: content_block_delta."""
+
     type: Literal["content_block_delta"] = "content_block_delta"
     index: int
     delta: Dict[str, Any]  # Delta with type and changed fields
@@ -377,12 +457,14 @@ class ContentBlockDeltaEvent(BaseModel):
 
 class ContentBlockStopEvent(BaseModel):
     """Stream event: content_block_stop."""
+
     type: Literal["content_block_stop"] = "content_block_stop"
     index: int
 
 
 class MessageDeltaEvent(BaseModel):
     """Stream event: message_delta."""
+
     type: Literal["message_delta"] = "message_delta"
     delta: Dict[str, Any]  # Delta with stop_reason, stop_sequence
     usage: Optional[Dict[str, int]] = None  # Output token usage
@@ -390,16 +472,19 @@ class MessageDeltaEvent(BaseModel):
 
 class MessageStopEvent(BaseModel):
     """Stream event: message_stop."""
+
     type: Literal["message_stop"] = "message_stop"
 
 
 class PingEvent(BaseModel):
     """Stream event: ping (keep-alive)."""
+
     type: Literal["ping"] = "ping"
 
 
 class ErrorEvent(BaseModel):
     """Stream event: error."""
+
     type: Literal["error"] = "error"
     error: Dict[str, Any]
 
@@ -420,12 +505,14 @@ StreamEvent = Union[
 # Error Response
 class ErrorDetail(BaseModel):
     """Error detail structure."""
+
     type: str
     message: str
 
 
 class ErrorResponse(BaseModel):
     """Error response format."""
+
     type: Literal["error"] = "error"
     error: ErrorDetail
 
@@ -433,6 +520,7 @@ class ErrorResponse(BaseModel):
 # Count Tokens Models
 class CountTokensRequest(BaseModel):
     """Request to count tokens in a set of messages."""
+
     model: str
     messages: List[Message]
     system: Optional[Union[str, List[SystemMessage]]] = None
@@ -449,4 +537,5 @@ class CountTokensRequest(BaseModel):
 
 class CountTokensResponse(BaseModel):
     """Response with token count."""
+
     input_tokens: int
