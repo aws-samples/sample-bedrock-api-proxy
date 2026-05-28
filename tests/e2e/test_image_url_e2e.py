@@ -24,14 +24,14 @@ PROXY_URL = os.environ.get("PROXY_URL", "").rstrip("/")
 API_KEY = os.environ.get("PROXY_API_KEY", "")
 MODEL = os.environ.get("PROXY_TEST_MODEL", "claude-sonnet-4-5-20250929")
 
-# Small public PNG that doesn't UA-filter. httpbin returns a real image
-# with proper Content-Type. Override via PROXY_TEST_IMAGE_URL.
+# Small public PNG that doesn't UA-filter. Override via PROXY_TEST_IMAGE_URL.
+# Default uses Google's static WebP gallery — a small, stable, UA-friendly CDN.
 PUBLIC_IMAGE_URL = os.environ.get(
     "PROXY_TEST_IMAGE_URL",
-    "https://httpbin.org/image/png",
+    "https://www.gstatic.com/webp/gallery/1.webp",
 )
 # A 404-returning URL whose host resolves and returns proper HTTP status.
-NOT_FOUND_URL = "https://httpbin.org/status/404"
+NOT_FOUND_URL = "https://www.gstatic.com/webp/gallery/this-does-not-exist.webp"
 
 pytestmark = pytest.mark.skipif(
     not (PROXY_URL and API_KEY),
@@ -108,13 +108,20 @@ def test_url_image_source_anthropic_native():
 
 def test_url_image_source_with_explicit_media_type():
     """media_type on a URL source is optional but should be honored if given."""
+    actual_ct = (
+        httpx.head(PUBLIC_IMAGE_URL, follow_redirects=True, timeout=15)
+        .headers.get("content-type", "image/png")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
     payload = _build_request(
         {
             "type": "image",
             "source": {
                 "type": "url",
                 "url": PUBLIC_IMAGE_URL,
-                "media_type": "image/jpeg",
+                "media_type": actual_ct,
             },
         }
     )
