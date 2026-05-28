@@ -24,11 +24,14 @@ PROXY_URL = os.environ.get("PROXY_URL", "").rstrip("/")
 API_KEY = os.environ.get("PROXY_API_KEY", "")
 MODEL = os.environ.get("PROXY_TEST_MODEL", "claude-sonnet-4-5-20250929")
 
-# Public, stable image used by Anthropic's docs. ~50KB JPEG.
-PUBLIC_IMAGE_URL = (
-    "https://upload.wikimedia.org/wikipedia/commons/a/a7/"
-    "Camponotus_flavomarginatus_ant.jpg"
+# Small public PNG that doesn't UA-filter. httpbin returns a real image
+# with proper Content-Type. Override via PROXY_TEST_IMAGE_URL.
+PUBLIC_IMAGE_URL = os.environ.get(
+    "PROXY_TEST_IMAGE_URL",
+    "https://httpbin.org/image/png",
 )
+# A 404-returning URL whose host resolves and returns proper HTTP status.
+NOT_FOUND_URL = "https://httpbin.org/status/404"
 
 pytestmark = pytest.mark.skipif(
     not (PROXY_URL and API_KEY),
@@ -73,6 +76,18 @@ def _assert_message_shape(body: dict[str, Any]) -> None:
     text_blocks = [b for b in content if b.get("type") == "text"]
     assert text_blocks, f"no text content in response: {body}"
     assert text_blocks[0]["text"].strip(), f"empty text: {body}"
+
+
+def _assert_invalid_request_error(body: dict[str, Any]) -> dict[str, Any]:
+    """Walk the proxy's error envelope to find the inner invalid_request_error.
+    Shape: {"type":"error","error":{"type":"invalid_request_error","message":"..."}}.
+    Returns the inner error dict for further assertions on `message`.
+    """
+    assert body.get("type") == "error", body
+    inner = body.get("error", {})
+    assert inner.get("type") == "invalid_request_error", body
+    assert inner.get("message"), body
+    return inner
 
 
 # --- Happy paths -----------------------------------------------------------
@@ -135,14 +150,18 @@ def test_url_image_source_without_type_field_back_compat():
 def test_base64_image_source_regression():
     """Regression: existing base64-source flow must still work after the
     discriminated-union refactor."""
-    # Use a real fetched image so we know Bedrock accepts it.
-    img = httpx.get(PUBLIC_IMAGE_URL, timeout=30).content
+    img_resp = httpx.get(PUBLIC_IMAGE_URL, timeout=30)
+    img = img_resp.content
+    media_type = (
+        img_resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        or "image/png"
+    )
     payload = _build_request(
         {
             "type": "image",
             "source": {
                 "type": "base64",
-                "media_type": "image/jpeg",
+                "media_type": media_type,
                 "data": base64.b64encode(img).decode(),
             },
         }
@@ -158,28 +177,17 @@ def test_base64_image_source_regression():
 def test_url_image_source_404_returns_400_invalid_request():
     """A 4xx from the upstream image URL becomes a 400 invalid_request_error."""
     payload = _build_request(
-        {
-            "type": "image",
-            "source": {
-                "type": "url",
-                "url": "https://upload.wikimedia.org/this-does-not-exist.png",
-            },
-        }
+        {"type": "image", "source": {"type": "url", "url": NOT_FOUND_URL}}
     )
     r = _post_messages(payload)
     assert r.status_code == 400, r.text
-    body = r.json()
-    err = body.get("error") or body.get("detail", {}).get("error", {})
-    assert err.get("type") == "invalid_request_error", body
+    _assert_invalid_request_error(r.json())
 
 
 def test_url_image_source_error_message_does_not_leak_query_string():
     """Presigned-token-style query strings must not echo back to the client."""
     secret = "SECRETTOKEN12345"
-    bad_url = (
-        "https://upload.wikimedia.org/this-does-not-exist.png"
-        f"?Signature={secret}&Expires=999"
-    )
+    bad_url = f"{NOT_FOUND_URL}?Signature={secret}&Expires=999"
     payload = _build_request(
         {"type": "image", "source": {"type": "url", "url": bad_url}}
     )

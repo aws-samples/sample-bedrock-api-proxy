@@ -300,12 +300,11 @@ async def create_message(
     try:
         await resolve_image_urls(request_data.messages)
     except ImageUrlFetchError as e:
+        # Global handler in app/main.py wraps detail as {"type":"error","error":<detail>},
+        # so detail itself must be the inner error object (not double-wrapped).
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "type": "error",
-                "error": {"type": "invalid_request_error", "message": str(e)},
-            },
+            detail={"type": "invalid_request_error", "message": str(e)},
         )
 
     # Extract provider_id from API key info for multi-provider Bedrock routing
