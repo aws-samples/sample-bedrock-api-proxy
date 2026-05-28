@@ -106,6 +106,30 @@ def test_url_image_source_anthropic_native():
     _assert_message_shape(r.json())
 
 
+def test_openai_style_image_url_block():
+    """OpenAI-style {type:'image_url', image_url:{url:...}} is coerced to
+    Anthropic-native and processed identically."""
+    payload = _build_request(
+        {"type": "image_url", "image_url": {"url": PUBLIC_IMAGE_URL}}
+    )
+    r = _post_messages(payload)
+    assert r.status_code == 200, r.text
+    _assert_message_shape(r.json())
+
+
+def test_openai_style_data_url_block():
+    """OpenAI-style data: URL is decoded inline, no fetch performed."""
+    img = httpx.get(PUBLIC_IMAGE_URL, timeout=30)
+    media_type = img.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+    data_url = f"data:{media_type};base64,{base64.b64encode(img.content).decode()}"
+    payload = _build_request(
+        {"type": "image_url", "image_url": {"url": data_url}}
+    )
+    r = _post_messages(payload)
+    assert r.status_code == 200, r.text
+    _assert_message_shape(r.json())
+
+
 def test_url_image_source_with_explicit_media_type():
     """media_type on a URL source is optional but should be honored if given."""
     actual_ct = (

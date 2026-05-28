@@ -286,6 +286,49 @@ class CacheControl(BaseModel):
 
 
 # Message Structure
+def _coerce_openai_image_url_block(block: Any) -> Any:
+    """Rewrite an OpenAI-style {"type":"image_url","image_url":{"url":...}} block
+    into Anthropic-native {"type":"image","source": ...}. Accepts both http(s)
+    URLs (resolved later by resolve_image_urls) and inline data: URLs (decoded
+    here into base64 source).
+    """
+    if not isinstance(block, dict) or block.get("type") != "image_url":
+        return block
+
+    image_url = block.get("image_url") or {}
+    url = image_url.get("url") if isinstance(image_url, dict) else None
+    if not isinstance(url, str) or not url:
+        # Let Pydantic surface a proper validation error.
+        return block
+
+    if url.startswith("data:"):
+        # Format: data:[<mediatype>][;base64],<data>
+        try:
+            head, payload = url.split(",", 1)
+        except ValueError:
+            return block
+        meta = head[5:]  # strip "data:"
+        is_b64 = meta.endswith(";base64")
+        if is_b64:
+            meta = meta[: -len(";base64")]
+        media_type = meta or "image/png"
+        if not is_b64:
+            # Plain (urlencoded) data URLs — re-encode to base64.
+            from base64 import b64encode
+            from urllib.parse import unquote_to_bytes
+
+            payload = b64encode(unquote_to_bytes(payload)).decode("ascii")
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": payload},
+        }
+
+    return {
+        "type": "image",
+        "source": {"type": "url", "url": url},
+    }
+
+
 class Message(BaseModel):
     """Message in the conversation."""
 
@@ -295,9 +338,12 @@ class Message(BaseModel):
     @field_validator("content", mode="before")
     @classmethod
     def convert_string_to_list(cls, v):
-        """Convert string content to list of TextContent blocks."""
+        """Convert string content to list of TextContent blocks; also coerce
+        OpenAI-style image_url blocks to Anthropic-native image blocks."""
         if isinstance(v, str):
             return [{"type": "text", "text": v}]
+        if isinstance(v, list):
+            return [_coerce_openai_image_url_block(b) for b in v]
         return v
 
 

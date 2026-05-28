@@ -254,6 +254,8 @@ Image content blocks on `/v1/messages` accept Anthropic's URL source shape in ad
 
 ### Request shape
 
+Anthropic-native:
+
 ```json
 {
   "type": "image",
@@ -261,7 +263,15 @@ Image content blocks on `/v1/messages` accept Anthropic's URL source shape in ad
 }
 ```
 
-`media_type` is optional on URL sources. Resolution priority: explicit `media_type` field → `Content-Type` header → magic-byte sniff (PNG/JPEG/GIF/WEBP).
+Also accepted: OpenAI-style `image_url` block (coerced at validation time):
+
+```json
+{ "type": "image_url", "image_url": { "url": "https://example.com/photo.png" } }
+```
+
+`image_url.url` may be `http(s)://` (fetched by the proxy) or a `data:image/...;base64,...` URL (decoded inline, no network).
+
+`media_type` on the native form is optional. Resolution priority for URL fetches: explicit `media_type` field → `Content-Type` header → magic-byte sniff (PNG/JPEG/GIF/WEBP).
 
 ### How it Works
 
