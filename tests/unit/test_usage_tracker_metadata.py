@@ -81,3 +81,38 @@ def test_resolver_failure_does_not_break_usage_recording(tracker, monkeypatch):
         output_tokens=5,
     )
     tracker.table.put_item.assert_called_once()
+
+
+def test_get_usage_stats_excludes_cached_from_input_when_inclusive(tracker):
+    """OpenAI passthrough records carry cache-inclusive input_tokens (flag set).
+
+    get_usage_stats must subtract the cached subset so the displayed input isn't
+    inflated by tokens already reported under `cached`.
+    """
+    tracker.table.query.return_value = {
+        "Items": [
+            {
+                "input_tokens": 100,  # includes 30 cached
+                "output_tokens": 50,
+                "cached_tokens": 30,
+                "cache_write_input_tokens": 0,
+                "success": True,
+                "metadata": {"input_tokens_include_cached_tokens": True},
+            },
+            {
+                "input_tokens": 40,  # native Anthropic record, already cache-exclusive
+                "output_tokens": 10,
+                "cached_tokens": 5,
+                "cache_write_input_tokens": 0,
+                "success": True,
+                "metadata": {},
+            },
+        ]
+    }
+
+    stats = tracker.get_usage_stats("sk-test")
+
+    # 70 (100-30) + 40 = 110, not 140.
+    assert stats["total_input_tokens"] == 110
+    assert stats["total_cached_tokens"] == 35
+    assert stats["total_output_tokens"] == 60

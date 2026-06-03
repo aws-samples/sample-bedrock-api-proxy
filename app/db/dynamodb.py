@@ -922,6 +922,27 @@ def _safe_resolve_model(model: str) -> str:
         return model
 
 
+def _displayed_input_tokens(
+    input_tokens: int,
+    cached_tokens: int,
+    cache_write_tokens: int,
+    metadata: Optional[Dict[str, Any]],
+) -> int:
+    """Return input_tokens normalized to the Anthropic convention (cache-exclusive).
+
+    OpenAI-format APIs (passthrough) report ``input_tokens`` *inclusive* of cached
+    (and cache-write) tokens, and tag the record with
+    ``metadata.input_tokens_include_cached_tokens``. The rest of the proxy follows
+    the Anthropic convention where ``input_tokens`` excludes cache reads/writes
+    (total input = input + cache_read + cache_creation). When the flag is set we
+    subtract the cached portion so displayed totals don't double-count it — this
+    mirrors the billing logic in ``aggregate_usage_for_key``.
+    """
+    if metadata and metadata.get("input_tokens_include_cached_tokens"):
+        return max(input_tokens - cached_tokens - cache_write_tokens, 0)
+    return input_tokens
+
+
 class UsageTracker:
     """Tracker for API usage and analytics."""
 
@@ -1040,7 +1061,15 @@ class UsageTracker:
 
         # Aggregate statistics
         total_requests = len(items)
-        total_input_tokens = sum(item.get("input_tokens", 0) for item in items)
+        total_input_tokens = sum(
+            _displayed_input_tokens(
+                int(item.get("input_tokens", 0) or 0),
+                int(item.get("cached_tokens", 0) or 0),
+                int(item.get("cache_write_input_tokens", 0) or 0),
+                item.get("metadata"),
+            )
+            for item in items
+        )
         total_output_tokens = sum(item.get("output_tokens", 0) for item in items)
         total_cached_tokens = sum(item.get("cached_tokens", 0) for item in items)
         total_cache_write_input_tokens = sum(item.get("cache_write_input_tokens", 0) for item in items)
@@ -1597,7 +1626,9 @@ class UsageStatsManager:
                     record_timestamp = int(item.get("timestamp", 0))
                     metadata = item.get("metadata") or {}
 
-                    total_input_tokens += input_tokens
+                    total_input_tokens += _displayed_input_tokens(
+                        input_tokens, cached_tokens, cache_write_tokens, metadata
+                    )
                     total_output_tokens += output_tokens
                     total_cached_tokens += cached_tokens
                     total_cache_write_tokens += cache_write_tokens
