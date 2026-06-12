@@ -1613,32 +1613,29 @@ class ModelPricingManager:
         Returns:
             Dict with 'items' and 'last_key' for pagination
         """
-        # Use GSI if filtering by provider
+        # Scan with optional filters. The pricing table is tiny (tens of rows),
+        # so a scan+filter is cheap and avoids requiring a provider GSI.
+        scan_kwargs: Dict[str, Any] = {"Limit": limit}
+        if last_key:
+            scan_kwargs["ExclusiveStartKey"] = last_key
+
+        filter_parts = []
+        expr_names: Dict[str, str] = {}
+        expr_values: Dict[str, Any] = {}
         if provider_filter:
-            query_kwargs = {
-                "IndexName": "provider-index",
-                "KeyConditionExpression": "provider = :provider",
-                "ExpressionAttributeValues": {":provider": provider_filter},
-                "Limit": limit,
-            }
-            if last_key:
-                query_kwargs["ExclusiveStartKey"] = last_key
-            if status_filter:
-                query_kwargs["FilterExpression"] = "#s = :status"
-                query_kwargs["ExpressionAttributeNames"] = {"#s": "status"}
-                query_kwargs["ExpressionAttributeValues"][":status"] = status_filter
+            filter_parts.append("provider = :provider")
+            expr_values[":provider"] = provider_filter
+        if status_filter:
+            filter_parts.append("#s = :status")
+            expr_names["#s"] = "status"
+            expr_values[":status"] = status_filter
+        if filter_parts:
+            scan_kwargs["FilterExpression"] = " AND ".join(filter_parts)
+            if expr_names:
+                scan_kwargs["ExpressionAttributeNames"] = expr_names
+            scan_kwargs["ExpressionAttributeValues"] = expr_values
 
-            response = self.table.query(**query_kwargs)
-        else:
-            scan_kwargs: Dict[str, Any] = {"Limit": limit}
-            if last_key:
-                scan_kwargs["ExclusiveStartKey"] = last_key
-            if status_filter:
-                scan_kwargs["FilterExpression"] = "#s = :status"
-                scan_kwargs["ExpressionAttributeNames"] = {"#s": "status"}
-                scan_kwargs["ExpressionAttributeValues"] = {":status": status_filter}
-
-            response = self.table.scan(**scan_kwargs)
+        response = self.table.scan(**scan_kwargs)
 
         return {
             "items": response.get("Items", []),
@@ -1656,9 +1653,8 @@ class ModelPricingManager:
         Returns:
             List of pricing items for the provider
         """
-        response = self.table.query(
-            IndexName="provider-index",
-            KeyConditionExpression="provider = :provider",
+        response = self.table.scan(
+            FilterExpression="provider = :provider",
             ExpressionAttributeValues={":provider": provider},
         )
         return response.get("Items", [])
