@@ -91,7 +91,12 @@
     "newKeysThisWeek": "本周新增",
     "totalModels": "模型总数",
     "activeModels": "已启用",
-    "totalTokenUsage": "令牌总使用量"
+    "totalTokenUsage": "令牌总使用量",
+    "dailyUsage": "每日用量",
+    "cost": "花费",
+    "tokens": "令牌",
+    "lastNDays": "最近 {{count}} 天",
+    "dailyUsageError": "加载每日用量失败"
   },
   "apiKeys": {
     "title": "用户与 API 密钥管理",

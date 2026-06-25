@@ -17,3 +17,26 @@ export interface DashboardStats {
   total_cache_write_tokens: number;
   total_requests: number;
 }
+
+export interface DailyModelUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  tokens: number;
+  cost: number;
+  requests: number;
+}
+
+export interface DailyUsage {
+  date: string; // YYYY-MM-DD (UTC)
+  total_tokens: number;
+  total_cost: number;
+  models: DailyModelUsage[];
+}
+
+export interface DailyUsageResponse {
+  days: number;
+  start_date: string;
+  end_date: string;
+  daily: DailyUsage[];
+}

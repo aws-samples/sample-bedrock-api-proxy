@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useDashboardStats } from '../hooks';
 import { formatTokens, cacheHitRate, formatCacheHitRate } from '../utils';
+import DailyUsageChart from '../components/DailyUsageChart';
 
 export default function Dashboard() {
   const { t } = useTranslation();
@@ -195,6 +196,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Daily token / cost usage */}
+      <DailyUsageChart />
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

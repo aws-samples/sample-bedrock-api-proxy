@@ -17,6 +17,7 @@ import type {
   PricingUpdate,
   PricingListResponse,
   DashboardStats,
+  DailyUsageResponse,
   ModelMapping,
   ModelMappingCreate,
   ModelMappingUpdate,
@@ -188,6 +189,9 @@ export const authApi = {
 export const dashboardApi = {
   getStats: async (): Promise<DashboardStats> => {
     return apiFetch('/dashboard/stats');
+  },
+  getDailyUsage: async (days: number): Promise<DailyUsageResponse> => {
+    return apiFetch(`/dashboard/daily-usage?days=${days}`);
   },
 };
 

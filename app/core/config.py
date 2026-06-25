@@ -91,9 +91,13 @@ class Settings(BaseSettings):
         alias="DYNAMODB_RESPONSE_CONTEXT_TABLE",
     )
     usage_ttl_days: int = Field(
-        default=7,
+        default=30,
         alias="USAGE_TTL_DAYS",
-        description="TTL in days for usage records in DynamoDB (0 to disable TTL)"
+        description=(
+            "TTL in days for usage records in DynamoDB (0 to disable TTL). "
+            "Caps how far back the daily-usage dashboard can show; keep >= the "
+            "max dashboard window (30)."
+        )
     )
     response_context_ttl_seconds: int = Field(
         default=3600,

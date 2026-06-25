@@ -23,3 +23,32 @@ class DashboardStats(BaseModel):
     total_cached_tokens: int = 0
     total_cache_write_tokens: int = 0
     total_requests: int = 0
+
+
+class DailyModelUsage(BaseModel):
+    """Per-model usage within a single day."""
+
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tokens: int = 0
+    cost: float = 0.0
+    requests: int = 0
+
+
+class DailyUsage(BaseModel):
+    """Aggregated usage for a single calendar day (UTC), broken down by model."""
+
+    date: str  # YYYY-MM-DD (UTC)
+    total_tokens: int = 0
+    total_cost: float = 0.0
+    models: List[DailyModelUsage] = []
+
+
+class DailyUsageResponse(BaseModel):
+    """Response for the daily token/cost dashboard panel."""
+
+    days: int
+    start_date: str
+    end_date: str
+    daily: List[DailyUsage] = []

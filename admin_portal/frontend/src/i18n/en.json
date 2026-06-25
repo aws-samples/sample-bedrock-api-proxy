@@ -91,7 +91,12 @@
     "newKeysThisWeek": "new this week",
     "totalModels": "Total Models",
     "activeModels": "active",
-    "totalTokenUsage": "Total Token Usage"
+    "totalTokenUsage": "Total Token Usage",
+    "dailyUsage": "Daily Usage",
+    "cost": "Cost",
+    "tokens": "Tokens",
+    "lastNDays": "Last {{count}} days",
+    "dailyUsageError": "Failed to load daily usage"
   },
   "apiKeys": {
     "title": "User & API Key Management",

@@ -943,6 +943,55 @@ def _displayed_input_tokens(
     return input_tokens
 
 
+def _record_cost(
+    item: Dict[str, Any],
+    pricing: Optional[Dict[str, Any]],
+) -> float:
+    """Compute the USD cost of a single usage record given its model pricing.
+
+    Shared by ``aggregate_usage_for_key`` (cumulative totals) and
+    ``aggregate_daily_usage`` (per-day/per-model buckets) so both apply the exact
+    same billing rules:
+      - cache-write priced at the stored 5m rate, or 2.0x input price for 1h TTL
+      - OpenAI cache-inclusive ``input_tokens`` normalized to billable input
+    Returns 0.0 when pricing is missing (tokens still counted elsewhere).
+    """
+    if not pricing:
+        return 0.0
+
+    input_tokens = int(item.get("input_tokens", 0) or 0)
+    output_tokens = int(item.get("output_tokens", 0) or 0)
+    cached_tokens = int(item.get("cached_tokens", 0) or 0)
+    cache_write_tokens = int(item.get("cache_write_input_tokens", 0) or 0)
+    metadata = item.get("metadata") or {}
+
+    input_price = float(pricing.get("input_price", 0) or 0)
+    output_price = float(pricing.get("output_price", 0) or 0)
+    cache_read_price = float(pricing.get("cache_read_price", 0) or 0)
+    cache_write_price = float(pricing.get("cache_write_price", 0) or 0)
+
+    # Cache write pricing depends on TTL duration:
+    #   5m (default): stored as cache_write_price (1.25x input)
+    #   1h: 2.0x input price (derived)
+    if item.get("cache_ttl") == "1h":
+        effective_cache_write_price = input_price * 2.0
+    else:
+        effective_cache_write_price = cache_write_price
+
+    if metadata.get("input_tokens_include_cached_tokens"):
+        input_billable_tokens = max(input_tokens - cached_tokens - cache_write_tokens, 0)
+    else:
+        input_billable_tokens = input_tokens
+
+    # Prices are per 1M tokens
+    return (
+        (input_billable_tokens * input_price / 1_000_000)
+        + (output_tokens * output_price / 1_000_000)
+        + (cached_tokens * cache_read_price / 1_000_000)
+        + (cache_write_tokens * effective_cache_write_price / 1_000_000)
+    )
+
+
 class UsageTracker:
     """Tracker for API usage and analytics."""
 
@@ -1643,38 +1692,7 @@ class UsageStatsManager:
                     if pricing_cache and model:
                         # Resolve model ID to Bedrock format for pricing lookup
                         bedrock_model_id = self._resolve_model_id(model, model_mapping_cache)
-                        pricing = pricing_cache.get(bedrock_model_id)
-                        if pricing:
-                            input_price = float(pricing.get("input_price", 0))
-                            output_price = float(pricing.get("output_price", 0))
-                            cache_read_price = float(pricing.get("cache_read_price", 0) or 0)
-                            cache_write_price = float(pricing.get("cache_write_price", 0) or 0)
-
-                            # Cache write pricing depends on TTL duration:
-                            #   5m (default): 1.25x input price (stored as cache_write_price)
-                            #   1h: 2.0x input price (derived from input_price)
-                            record_cache_ttl = item.get("cache_ttl")
-                            if record_cache_ttl == "1h":
-                                effective_cache_write_price = input_price * 2.0
-                            else:
-                                effective_cache_write_price = cache_write_price
-
-                            if metadata.get("input_tokens_include_cached_tokens"):
-                                input_billable_tokens = max(
-                                    input_tokens - cached_tokens - cache_write_tokens,
-                                    0,
-                                )
-                            else:
-                                input_billable_tokens = input_tokens
-
-                            # Prices are per 1M tokens
-                            cost = (
-                                (input_billable_tokens * input_price / 1_000_000)
-                                + (output_tokens * output_price / 1_000_000)
-                                + (cached_tokens * cache_read_price / 1_000_000)
-                                + (cache_write_tokens * effective_cache_write_price / 1_000_000)
-                            )
-                            total_cost += cost
+                        total_cost += _record_cost(item, pricing_cache.get(bedrock_model_id))
 
                 last_key = response.get("LastEvaluatedKey")
                 if not last_key:
@@ -1692,6 +1710,102 @@ class UsageStatsManager:
             "total_cost": total_cost,
             "max_timestamp": max_timestamp,
         }
+
+    def aggregate_daily_usage(
+        self,
+        api_keys: List[str],
+        since_timestamp: int,
+        pricing_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+        model_mapping_cache: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Union[int, float]]]]:
+        """Aggregate raw usage records into per-day, per-model buckets.
+
+        Scans the usage table for each API key (records newer than
+        ``since_timestamp``) and groups by ``(UTC date, model)``. Token totals
+        follow the Anthropic display convention; cost reuses ``_record_cost`` so
+        billing matches the cumulative aggregation exactly.
+
+        Args:
+            api_keys: API keys to scan.
+            since_timestamp: Unix ms; only records with timestamp > this are read.
+            pricing_cache: Optional model pricing keyed by Bedrock model ID.
+            model_mapping_cache: Optional Anthropic→Bedrock id map for pricing lookup.
+
+        Returns:
+            ``{ "YYYY-MM-DD": { model: {input_tokens, output_tokens, tokens,
+            cached_tokens, cache_write_tokens, cost, requests} } }``
+        """
+        pricing_cache = pricing_cache or {}
+        model_mapping_cache = model_mapping_cache or {}
+        buckets: Dict[str, Dict[str, Dict[str, Union[int, float]]]] = {}
+        since_str = str(since_timestamp)
+
+        for api_key in api_keys:
+            try:
+                paginator_params: Dict[str, Any] = {
+                    "KeyConditionExpression": "api_key = :api_key AND #ts > :since_ts",
+                    "ExpressionAttributeValues": {
+                        ":api_key": api_key,
+                        ":since_ts": since_str,
+                    },
+                    "ExpressionAttributeNames": {"#ts": "timestamp"},
+                }
+                last_key = None
+                while True:
+                    if last_key:
+                        paginator_params["ExclusiveStartKey"] = last_key
+                    response = self.usage_table.query(**paginator_params)
+
+                    for item in response.get("Items", []):
+                        record_timestamp = int(item.get("timestamp", 0) or 0)
+                        if record_timestamp <= 0:
+                            continue
+                        # timestamp is stored in milliseconds
+                        day = datetime.fromtimestamp(
+                            record_timestamp / 1000, tz=timezone.utc
+                        ).strftime("%Y-%m-%d")
+                        model = item.get("model", "") or "unknown"
+
+                        input_tokens = int(item.get("input_tokens", 0) or 0)
+                        output_tokens = int(item.get("output_tokens", 0) or 0)
+                        cached_tokens = int(item.get("cached_tokens", 0) or 0)
+                        cache_write_tokens = int(item.get("cache_write_input_tokens", 0) or 0)
+                        metadata = item.get("metadata") or {}
+                        displayed_input = _displayed_input_tokens(
+                            input_tokens, cached_tokens, cache_write_tokens, metadata
+                        )
+
+                        bedrock_model_id = self._resolve_model_id(model, model_mapping_cache)
+                        cost = _record_cost(item, pricing_cache.get(bedrock_model_id))
+
+                        day_bucket = buckets.setdefault(day, {})
+                        entry = day_bucket.setdefault(
+                            model,
+                            {
+                                "input_tokens": 0,
+                                "output_tokens": 0,
+                                "tokens": 0,
+                                "cached_tokens": 0,
+                                "cache_write_tokens": 0,
+                                "cost": 0.0,
+                                "requests": 0,
+                            },
+                        )
+                        entry["input_tokens"] += displayed_input
+                        entry["output_tokens"] += output_tokens
+                        entry["tokens"] += displayed_input + output_tokens
+                        entry["cached_tokens"] += cached_tokens
+                        entry["cache_write_tokens"] += cache_write_tokens
+                        entry["cost"] += cost
+                        entry["requests"] += 1
+
+                    last_key = response.get("LastEvaluatedKey")
+                    if not last_key:
+                        break
+            except ClientError as e:
+                print(f"Error aggregating daily usage for {api_key}: {e}")
+
+        return buckets
 
     @staticmethod
     def get_service_tier_multiplier(service_tier: Optional[str]) -> float:
