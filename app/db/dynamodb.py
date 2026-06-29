@@ -1717,6 +1717,7 @@ class UsageStatsManager:
         since_timestamp: int,
         pricing_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         model_mapping_cache: Optional[Dict[str, str]] = None,
+        service_tier_cache: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict[str, Dict[str, Union[int, float]]]]:
         """Aggregate raw usage records into per-day, per-model buckets.
 
@@ -1730,6 +1731,7 @@ class UsageStatsManager:
             since_timestamp: Unix ms; only records with timestamp > this are read.
             pricing_cache: Optional model pricing keyed by Bedrock model ID.
             model_mapping_cache: Optional Anthropic→Bedrock id map for pricing lookup.
+            service_tier_cache: Optional API key → service tier map for cost adjustment.
 
         Returns:
             ``{ "YYYY-MM-DD": { model: {input_tokens, output_tokens, tokens,
@@ -1737,10 +1739,13 @@ class UsageStatsManager:
         """
         pricing_cache = pricing_cache or {}
         model_mapping_cache = model_mapping_cache or {}
+        service_tier_cache = service_tier_cache or {}
         buckets: Dict[str, Dict[str, Dict[str, Union[int, float]]]] = {}
         since_str = str(since_timestamp)
 
         for api_key in api_keys:
+            service_tier = service_tier_cache.get(api_key, "default")
+            cost_multiplier = self.get_service_tier_multiplier(service_tier)
             try:
                 paginator_params: Dict[str, Any] = {
                     "KeyConditionExpression": "api_key = :api_key AND #ts > :since_ts",
@@ -1776,7 +1781,10 @@ class UsageStatsManager:
                         )
 
                         bedrock_model_id = self._resolve_model_id(model, model_mapping_cache)
-                        cost = _record_cost(item, pricing_cache.get(bedrock_model_id))
+                        cost = (
+                            _record_cost(item, pricing_cache.get(bedrock_model_id))
+                            * cost_multiplier
+                        )
 
                         day_bucket = buckets.setdefault(day, {})
                         entry = day_bucket.setdefault(

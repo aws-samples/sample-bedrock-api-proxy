@@ -89,6 +89,33 @@ def test_cost_matches_pricing_and_fable_rates():
     assert abs(buckets["2026-06-20"]["claude-fable-5"]["cost"] - 60.0) < 1e-9
 
 
+def test_cost_applies_service_tier_multiplier():
+    manager = _manager([
+        {"timestamp": str(TS_DAY1), "model": "claude-fable-5",
+         "input_tokens": 1_000_000, "output_tokens": 0, "cached_tokens": 0,
+         "cache_write_input_tokens": 0, "metadata": {}},
+    ])
+    pricing_cache = {
+        "global.anthropic.claude-fable-5": {
+            "input_price": Decimal("10.00"),
+            "output_price": Decimal("50.00"),
+            "cache_read_price": Decimal("1.00"),
+            "cache_write_price": Decimal("12.50"),
+        }
+    }
+
+    buckets = manager.aggregate_daily_usage(
+        ["sk-priority"],
+        since_timestamp=0,
+        pricing_cache=pricing_cache,
+        model_mapping_cache={"claude-fable-5": "global.anthropic.claude-fable-5"},
+        service_tier_cache={"sk-priority": "priority"},
+    )
+
+    # Priority tier is a 1.75x markup: $10 base input cost -> $17.50.
+    assert abs(buckets["2026-06-20"]["claude-fable-5"]["cost"] - 17.5) < 1e-9
+
+
 def test_1h_cache_write_priced_at_2x_input():
     manager = _manager([
         {"timestamp": str(TS_DAY1), "model": "claude-fable-5",

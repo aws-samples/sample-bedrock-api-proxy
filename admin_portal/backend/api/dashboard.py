@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Union
+from typing import Any, Union
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
@@ -18,6 +18,34 @@ from admin_portal.backend.schemas.dashboard import (
 )
 
 router = APIRouter()
+
+
+def _list_all_pricing_items(
+    pricing_manager: ModelPricingManager, limit: int = 1000
+) -> list[dict[str, Any]]:
+    """Return all pricing rows, following DynamoDB pagination."""
+    items: list[dict[str, Any]] = []
+    last_key: dict[str, Any] | None = None
+    while True:
+        result = pricing_manager.list_all_pricing(limit=limit, last_key=last_key)
+        items.extend(result.get("items", []))
+        last_key = result.get("last_key")
+        if not last_key:
+            return items
+
+
+def _list_all_api_key_items(
+    api_key_manager: APIKeyManager, limit: int = 1000
+) -> list[dict[str, Any]]:
+    """Return all API key rows, following DynamoDB pagination."""
+    items: list[dict[str, Any]] = []
+    last_key: dict[str, Any] | None = None
+    while True:
+        result = api_key_manager.list_all_api_keys(limit=limit, last_key=last_key)
+        items.extend(result.get("items", []))
+        last_key = result.get("last_key")
+        if not last_key:
+            return items
 
 
 def _parse_timestamp(value: Union[int, str, None]) -> int:
@@ -217,8 +245,7 @@ async def get_daily_usage(days: int = Query(default=30, ge=1, le=90)):
 
     # Build pricing cache (keyed by Bedrock model ID)
     pricing_cache: dict[str, dict] = {}
-    pricing_result = pricing_manager.list_all_pricing(limit=1000)
-    for item in pricing_result.get("items", []):
+    for item in _list_all_pricing_items(pricing_manager):
         model_id = item.get("model_id", "")
         if model_id:
             pricing_cache[model_id] = item
@@ -236,14 +263,20 @@ async def get_daily_usage(days: int = Query(default=30, ge=1, le=90)):
         print(f"[Dashboard] Error loading model mappings: {e}")
 
     # Collect all API keys to scan
-    all_keys_result = api_key_manager.list_all_api_keys(limit=1000)
-    api_keys = [k.get("api_key") for k in all_keys_result.get("items", []) if k.get("api_key")]
+    all_keys = _list_all_api_key_items(api_key_manager)
+    api_keys = [k.get("api_key") for k in all_keys if k.get("api_key")]
+    service_tier_cache = {
+        k["api_key"]: k.get("service_tier", "default")
+        for k in all_keys
+        if k.get("api_key")
+    }
 
     buckets = usage_stats_manager.aggregate_daily_usage(
         api_keys,
         since_timestamp=since_timestamp,
         pricing_cache=pricing_cache,
         model_mapping_cache=model_mapping_cache,
+        service_tier_cache=service_tier_cache,
     )
 
     # Zero-fill every day in the window so the chart has a continuous axis.
