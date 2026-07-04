@@ -171,6 +171,7 @@ class Settings(BaseSettings):
             "claude-opus-4-8": "global.anthropic.claude-opus-4-8",
             "claude-opus-4-7": "global.anthropic.claude-opus-4-7",
             "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
+            "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
             "claude-opus-4-6": "global.anthropic.claude-opus-4-6-v1",
             "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
             "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -186,6 +187,7 @@ class Settings(BaseSettings):
             "claude-opus-4-7[1m]": "global.anthropic.claude-opus-4-7",
             "claude-opus-4-6[1m]": "global.anthropic.claude-opus-4-6-v1",
             "claude-sonnet-4-6[1m]": "global.anthropic.claude-sonnet-4-6",
+            "claude-sonnet-5[1m]": "global.anthropic.claude-sonnet-5",
             # Non-Claude Bedrock models (identity-mapped).
             "minimax.minimax-m2.5": "minimax.minimax-m2.5",
             "zai.glm-5": "zai.glm-5",
