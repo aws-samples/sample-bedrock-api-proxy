@@ -536,7 +536,7 @@ async def create_message(
                     )
 
                 # Record usage
-                usage_tracker.record_usage(
+                usage_tracker.record_usage_nowait(
                     api_key=api_key_info.get("api_key"),
                     request_id=request_id,
                     model=request_data.model,
@@ -632,7 +632,7 @@ async def create_message(
                 )
 
                 # Record usage
-                usage_tracker.record_usage(
+                usage_tracker.record_usage_nowait(
                     api_key=api_key_info.get("api_key"),
                     request_id=request_id,
                     model=request_data.model,
@@ -716,7 +716,7 @@ async def create_message(
                         ws_error = str(e)
                         raise
                     finally:
-                        usage_tracker.record_usage(
+                        usage_tracker.record_usage_nowait(
                             api_key=api_key_info.get("api_key"),
                             request_id=request_id,
                             model=request_data.model,
@@ -746,7 +746,7 @@ async def create_message(
                 )
 
                 # Record usage
-                usage_tracker.record_usage(
+                usage_tracker.record_usage_nowait(
                     api_key=api_key_info.get("api_key"),
                     request_id=request_id,
                     model=request_data.model,
@@ -824,7 +824,7 @@ async def create_message(
                         wf_error = str(e)
                         raise
                     finally:
-                        usage_tracker.record_usage(
+                        usage_tracker.record_usage_nowait(
                             api_key=api_key_info.get("api_key"),
                             request_id=request_id,
                             model=request_data.model,
@@ -854,7 +854,7 @@ async def create_message(
                 )
 
                 # Record usage
-                usage_tracker.record_usage(
+                usage_tracker.record_usage_nowait(
                     api_key=api_key_info.get("api_key"),
                     request_id=request_id,
                     model=request_data.model,
@@ -959,7 +959,7 @@ async def create_message(
                 else:
                     result = await provider.invoke(request_data, target_model, api_key_info)
                     # Record usage
-                    usage_tracker.record_usage(
+                    usage_tracker.record_usage_nowait(
                         api_key=api_key_info.get("api_key"),
                         request_id=request_id,
                         model=target_model,
@@ -1060,7 +1060,7 @@ async def create_message(
                 _turn_span.end()
 
             # Record usage
-            usage_tracker.record_usage(
+            usage_tracker.record_usage_nowait(
                 api_key=api_key_info.get("api_key"),
                 request_id=request_id,
                 model=request_data.model,
@@ -1090,7 +1090,7 @@ async def create_message(
         print(f"[ERROR] HTTP Status: {e.http_status}")
         print(f"[ERROR] Error Type: {e.error_type}\n")
 
-        usage_tracker.record_usage(
+        usage_tracker.record_usage_nowait(
             api_key=api_key_info.get("api_key"),
             request_id=request_id,
             model=request_data.model,
@@ -1117,7 +1117,7 @@ async def create_message(
             exc_info=True,
         )
 
-        usage_tracker.record_usage(
+        usage_tracker.record_usage_nowait(
             api_key=api_key_info.get("api_key"),
             request_id=request_id,
             model=request_data.model,
@@ -1379,7 +1379,7 @@ async def _handle_streaming_request(
 
     finally:
         # Record usage after stream completes
-        usage_tracker.record_usage(
+        usage_tracker.record_usage_nowait(
             api_key=api_key_info.get("api_key"),
             request_id=request_id,
             model=request_data.model,

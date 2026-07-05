@@ -204,7 +204,7 @@ def _record_usage(
     _, usage, _ = _managers()
     norm = normalize_usage(raw_usage, api_surface)
     try:
-        usage.record_usage(
+        usage.record_usage_nowait(
             api_key=api_key_info.get("api_key", ""),
             request_id=str(uuid4()),
             model=model,

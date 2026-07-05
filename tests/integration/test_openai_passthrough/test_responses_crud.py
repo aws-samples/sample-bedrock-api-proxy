@@ -10,7 +10,7 @@ def test_get_response_forwards_and_returns_body(client, respx_mock, mock_usage_t
     assert r.status_code == 200
     assert r.json() == body
     # No usage logged for retrieval
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_delete_response_forwards(client, respx_mock):

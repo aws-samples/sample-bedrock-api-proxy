@@ -5,7 +5,9 @@ Provides interfaces for interacting with DynamoDB tables for API keys,
 usage tracking, and model mapping.
 """
 import json
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
@@ -15,7 +17,26 @@ import boto3
 from botocore.exceptions import ClientError
 
 from app.core.config import settings
+from app.core.ttl_cache import TTLCache
 from app.services.inference_profile_resolver import get_inference_profile_resolver
+
+# Single background thread for usage writes: keeps the synchronous
+# put_item off the event loop while serializing writes so the shared
+# boto3 Table resource is only ever touched by one writer thread.
+_usage_write_executor: Optional[ThreadPoolExecutor] = None
+_usage_write_executor_lock = threading.Lock()
+
+
+def _get_usage_write_executor() -> ThreadPoolExecutor:
+    """Lazily create the shared usage-writer executor (thread-safe)."""
+    global _usage_write_executor
+    if _usage_write_executor is None:
+        with _usage_write_executor_lock:
+            if _usage_write_executor is None:
+                _usage_write_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="usage-writer"
+                )
+    return _usage_write_executor
 
 
 class DynamoDBClient:
@@ -1073,6 +1094,26 @@ class UsageTracker:
 
         self.table.put_item(Item=item)
 
+    def record_usage_nowait(self, **kwargs) -> Future:
+        """Record API usage on a background thread without blocking the caller.
+
+        Request handlers run on the event loop; the synchronous
+        ``put_item`` in :meth:`record_usage` would otherwise freeze every
+        in-flight request (including streaming chunks) for the duration
+        of the DynamoDB round trip. Write failures are logged and
+        swallowed: losing one telemetry row must never fail a request.
+
+        Returns the Future so tests (or shutdown hooks) can wait on it.
+        """
+
+        def _write():
+            try:
+                self.record_usage(**kwargs)
+            except Exception as e:
+                print(f"[UsageTracker] Background usage write failed: {type(e).__name__}: {e}")
+
+        return _get_usage_write_executor().submit(_write)
+
     def get_usage_stats(
         self, api_key: str, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None
     ) -> Dict[str, Any]:
@@ -1139,14 +1180,26 @@ class UsageTracker:
 class ModelMappingManager:
     """Manager for custom model mappings."""
 
+    # Shared across instances: converters build a fresh manager per
+    # request, so an instance-level cache would never see a hit. Cached
+    # None entries matter too — clients passing Bedrock ARNs directly
+    # (pass-through) would otherwise pay a DynamoDB read per request.
+    _cache = TTLCache(max_entries=10_000)
+
     def __init__(self, dynamodb_client: DynamoDBClient):
         """Initialize model mapping manager."""
         self.dynamodb = dynamodb_client.dynamodb
         self.table = self.dynamodb.Table(dynamodb_client.model_mapping_table_name)
+        self._cache_ttl = settings.model_mapping_cache_ttl_seconds
 
     def get_mapping(self, anthropic_model_id: str) -> Optional[str]:
         """
         Get Bedrock model ID for an Anthropic model ID.
+
+        Results (including "no mapping") are cached for
+        ``settings.model_mapping_cache_ttl_seconds``; mapping changes
+        made in another process (e.g. the admin portal) take up to that
+        long to apply here.
 
         Args:
             anthropic_model_id: Anthropic model identifier
@@ -1154,14 +1207,25 @@ class ModelMappingManager:
         Returns:
             Bedrock model ARN or None
         """
+        if self._cache_ttl > 0:
+            hit, cached = self._cache.get(anthropic_model_id)
+            if hit:
+                return cached
+
         try:
             response = self.table.get_item(
                 Key={"anthropic_model_id": anthropic_model_id}
             )
-            item = response.get("Item")
-            return item.get("bedrock_model_id") if item else None
         except ClientError:
+            # Transient failure: fall back to default mapping upstream,
+            # but never cache it — that would pin None for the full TTL.
             return None
+
+        item = response.get("Item")
+        mapping = item.get("bedrock_model_id") if item else None
+        if self._cache_ttl > 0:
+            self._cache.set(anthropic_model_id, mapping, self._cache_ttl)
+        return mapping
 
     def set_mapping(self, anthropic_model_id: str, bedrock_model_id: str):
         """
@@ -1177,6 +1241,10 @@ class ModelMappingManager:
             "updated_at": int(time.time()),
         }
         self.table.put_item(Item=item)
+        if self._cache_ttl > 0:
+            self._cache.set(anthropic_model_id, bedrock_model_id, self._cache_ttl)
+        else:
+            self._cache.invalidate(anthropic_model_id)
 
     def delete_mapping(self, anthropic_model_id: str):
         """
@@ -1186,6 +1254,7 @@ class ModelMappingManager:
             anthropic_model_id: Anthropic model identifier
         """
         self.table.delete_item(Key={"anthropic_model_id": anthropic_model_id})
+        self._cache.invalidate(anthropic_model_id)
 
     def list_mappings(self) -> List[Dict[str, str]]:
         """
