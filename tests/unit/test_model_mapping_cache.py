@@ -114,3 +114,25 @@ def test_delete_mapping_invalidates_cache():
     m.get_mapping(ANTHROPIC_ID)  # must go back to DynamoDB
 
     assert m.table.get_item.call_count == 2
+
+
+def test_init_wires_ttl_from_settings():
+    """Pin the real __init__ wiring (other tests bypass it via __new__)."""
+    from app.core.config import settings
+    from app.db.dynamodb import ModelMappingManager
+
+    m = ModelMappingManager(MagicMock())
+
+    assert m._cache_ttl == settings.model_mapping_cache_ttl_seconds
+
+
+def test_set_mapping_with_ttl_zero_does_not_cache():
+    """With caching disabled, set_mapping must not plant a cache entry."""
+    m = make_manager(
+        cache_ttl=0, get_item_response={"Item": {"bedrock_model_id": BEDROCK_ID}}
+    )
+
+    m.set_mapping(ANTHROPIC_ID, BEDROCK_ID)
+    m.get_mapping(ANTHROPIC_ID)
+
+    assert m.table.get_item.call_count == 1

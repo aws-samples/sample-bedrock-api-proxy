@@ -55,7 +55,10 @@ def mock_model_mapping_manager():
 
 @pytest.fixture
 def mock_usage_tracker():
-    tracker = MagicMock()
+    from app.db.dynamodb import UsageTracker
+
+    # spec= so assertions fail if the real method is renamed or removed
+    tracker = MagicMock(spec=UsageTracker)
     with patch("app.api.openai_passthrough.router.UsageTracker", return_value=tracker):
         yield tracker
 

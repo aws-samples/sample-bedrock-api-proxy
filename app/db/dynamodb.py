@@ -4,7 +4,9 @@ DynamoDB client and table management.
 Provides interfaces for interacting with DynamoDB tables for API keys,
 usage tracking, and model mapping.
 """
+import inspect
 import json
+import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -20,11 +22,21 @@ from app.core.config import settings
 from app.core.ttl_cache import TTLCache
 from app.services.inference_profile_resolver import get_inference_profile_resolver
 
+logger = logging.getLogger(__name__)
+
 # Single background thread for usage writes: keeps the synchronous
-# put_item off the event loop while serializing writes so the shared
-# boto3 Table resource is only ever touched by one writer thread.
+# put_item off the event loop and serializes writes (one writer thread;
+# readers elsewhere share the underlying thread-safe boto3 client).
 _usage_write_executor: Optional[ThreadPoolExecutor] = None
 _usage_write_executor_lock = threading.Lock()
+
+# Backpressure bound: if DynamoDB hangs while traffic continues, queued
+# writes (and their kwargs) would otherwise accumulate without limit.
+# Past this depth new writes are dropped (counted + logged) — bounded
+# memory is worth more than a lossless backlog that OOMs the proxy.
+_MAX_PENDING_USAGE_WRITES = 10_000
+_pending_usage_writes = 0
+_pending_usage_writes_lock = threading.Lock()
 
 
 def _get_usage_write_executor() -> ThreadPoolExecutor:
@@ -37,6 +49,36 @@ def _get_usage_write_executor() -> ThreadPoolExecutor:
                     max_workers=1, thread_name_prefix="usage-writer"
                 )
     return _usage_write_executor
+
+
+def _completed_future() -> Future:
+    f: Future = Future()
+    f.set_result(None)
+    return f
+
+
+def drain_usage_writes(timeout: float = 5.0) -> int:
+    """Best-effort flush of queued usage writes (for app shutdown).
+
+    Blocks until the backlog is empty or the deadline passes. Returns
+    the number of writes still pending at the deadline (0 = fully
+    drained); pending writes are logged as lost.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _pending_usage_writes_lock:
+            if _pending_usage_writes == 0:
+                return 0
+        time.sleep(0.02)
+    with _pending_usage_writes_lock:
+        remaining = _pending_usage_writes
+    if remaining:
+        logger.warning(
+            "Shutdown deadline reached with %d usage writes still pending; "
+            "those usage/billing rows are lost",
+            remaining,
+        )
+    return remaining
 
 
 class DynamoDBClient:
@@ -469,36 +511,41 @@ class APIKeyManager:
             api_key: API key to validate
 
         Returns:
-            API key details if valid, None otherwise
+            API key details if valid, None if the key does not exist or
+            is inactive.
+
+        Raises:
+            ClientError: On DynamoDB failures (throttling, 5xx). Callers
+                must treat this as "lookup failed", not "invalid key" —
+                the auth middleware negative-caches None results, so
+                conflating the two would lock valid keys out during a
+                DynamoDB throttling event.
         """
-        try:
-            response = self.table.get_item(Key={"api_key": api_key})
-            item = response.get("Item")
+        response = self.table.get_item(Key={"api_key": api_key})
+        item = response.get("Item")
 
-            if not item:
-                return None
-
-            # If key is active, return it
-            if item.get("is_active", False):
-                return item
-
-            # Check if key was deactivated due to budget exceeded
-            # and if a new month has started - auto-reactivate it
-            deactivated_reason = item.get("deactivated_reason")
-            if deactivated_reason == "budget_exceeded":
-                budget_mtd_month = item.get("budget_mtd_month", "")
-                current_month = datetime.now(timezone.utc).strftime("%Y-%m")
-
-                if budget_mtd_month != current_month:
-                    # New month has started - reactivate and reset MTD
-                    self._reactivate_for_new_month(api_key, current_month)
-                    # Fetch updated item
-                    response = self.table.get_item(Key={"api_key": api_key})
-                    return response.get("Item")
-
+        if not item:
             return None
-        except ClientError:
-            return None
+
+        # If key is active, return it
+        if item.get("is_active", False):
+            return item
+
+        # Check if key was deactivated due to budget exceeded
+        # and if a new month has started - auto-reactivate it
+        deactivated_reason = item.get("deactivated_reason")
+        if deactivated_reason == "budget_exceeded":
+            budget_mtd_month = item.get("budget_mtd_month", "")
+            current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+            if budget_mtd_month != current_month:
+                # New month has started - reactivate and reset MTD
+                self._reactivate_for_new_month(api_key, current_month)
+                # Fetch updated item
+                response = self.table.get_item(Key={"api_key": api_key})
+                return response.get("Item")
+
+        return None
 
     def _reactivate_for_new_month(self, api_key: str, current_month: str) -> bool:
         """
@@ -1036,6 +1083,7 @@ class UsageTracker:
         cache_ttl: Optional[str] = None,
         api_surface: Optional[str] = None,
         reasoning_tokens: int = 0,
+        timestamp_ms: Optional[int] = None,
     ):
         """
         Record API usage.
@@ -1054,10 +1102,16 @@ class UsageTracker:
             cache_ttl: Effective cache TTL used ("5m" or "1h"), for billing differentiation
             api_surface: Source endpoint family ("messages", "chat_completions", or "responses")
             reasoning_tokens: Reasoning tokens (already counted in output_tokens; stored separately for visibility)
+            timestamp_ms: Event time in epoch milliseconds. Defaults to now.
+                The usage table key is (api_key, timestamp), so millisecond
+                precision keeps same-second rows from overwriting each other,
+                and callers that queue writes should stamp at submit time.
         """
         # Use string timestamp to match CDK table schema (STRING type)
         current_time = int(time.time())
-        timestamp = str(current_time * 1000)  # milliseconds as string
+        if timestamp_ms is None:
+            timestamp_ms = int(time.time() * 1000)
+        timestamp = str(timestamp_ms)
 
         resolved_model = _safe_resolve_model(model)
         metadata = dict(metadata) if metadata else {}
@@ -1100,19 +1154,68 @@ class UsageTracker:
         Request handlers run on the event loop; the synchronous
         ``put_item`` in :meth:`record_usage` would otherwise freeze every
         in-flight request (including streaming chunks) for the duration
-        of the DynamoDB round trip. Write failures are logged and
-        swallowed: losing one telemetry row must never fail a request.
+        of the DynamoDB round trip.
+
+        Never raises past argument validation: write failures, a full
+        backlog, and a shut-down executor are logged and swallowed —
+        call sites sit inside except/finally blocks, and a usage-write
+        error must never mask the original exception or fail a request.
+        Bad kwargs DO raise TypeError at the call site (a typo must not
+        become silently dropped billing data). The event timestamp is
+        stamped here, at submit time, so rows keep their true time even
+        if the backlog drains late.
 
         Returns the Future so tests (or shutdown hooks) can wait on it.
+        Use :func:`drain_usage_writes` to flush on app shutdown.
         """
+        global _pending_usage_writes
+
+        inspect.signature(self.record_usage).bind(**kwargs)
+        kwargs.setdefault("timestamp_ms", int(time.time() * 1000))
+
+        with _pending_usage_writes_lock:
+            if _pending_usage_writes >= _MAX_PENDING_USAGE_WRITES:
+                backlog = _pending_usage_writes
+            else:
+                backlog = None
+                _pending_usage_writes += 1
+        if backlog is not None:
+            logger.warning(
+                "Usage write dropped: backlog full (%d pending) — "
+                "usage/billing row lost for request_id=%s",
+                backlog,
+                kwargs.get("request_id"),
+            )
+            try:
+                from app.core.metrics import usage_writes_dropped_counter
+
+                usage_writes_dropped_counter.inc()
+            except Exception:
+                pass
+            return _completed_future()
 
         def _write():
+            global _pending_usage_writes
             try:
                 self.record_usage(**kwargs)
-            except Exception as e:
-                print(f"[UsageTracker] Background usage write failed: {type(e).__name__}: {e}")
+            except Exception:
+                logger.warning(
+                    "Background usage write failed for request_id=%s",
+                    kwargs.get("request_id"),
+                    exc_info=True,
+                )
+            finally:
+                with _pending_usage_writes_lock:
+                    _pending_usage_writes -= 1
 
-        return _get_usage_write_executor().submit(_write)
+        try:
+            return _get_usage_write_executor().submit(_write)
+        except RuntimeError as e:
+            # Executor already shut down (app/interpreter exit)
+            with _pending_usage_writes_lock:
+                _pending_usage_writes -= 1
+            logger.warning("Usage write skipped, writer shut down: %s", e)
+            return _completed_future()
 
     def get_usage_stats(
         self, api_key: str, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None
@@ -1184,7 +1287,7 @@ class ModelMappingManager:
     # request, so an instance-level cache would never see a hit. Cached
     # None entries matter too — clients passing Bedrock ARNs directly
     # (pass-through) would otherwise pay a DynamoDB read per request.
-    _cache = TTLCache(max_entries=10_000)
+    _cache = TTLCache()
 
     def __init__(self, dynamodb_client: DynamoDBClient):
         """Initialize model mapping manager."""

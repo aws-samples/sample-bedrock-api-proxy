@@ -212,6 +212,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("Shutting down application...")
 
+    # Flush queued usage/billing writes with a bounded deadline
+    from app.db.dynamodb import drain_usage_writes
+    await asyncio.to_thread(drain_usage_writes, 5.0)
+
     # Shutdown tracing
     if settings.enable_tracing:
         from app.tracing import shutdown_tracing

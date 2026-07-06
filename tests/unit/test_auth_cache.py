@@ -3,6 +3,7 @@ import asyncio
 import threading
 from unittest.mock import MagicMock
 
+import pytest
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
@@ -176,3 +177,88 @@ def test_validation_error_returns_401_but_is_not_cached(monkeypatch):
     assert r2.status_code == 200
     assert info2["user_id"] == "u1"
     assert middleware.api_key_manager.validate_api_key.call_count == 2
+
+
+def test_manager_reraises_client_error_instead_of_returning_none():
+    """DynamoDB throttling must surface as an error, not as "invalid key".
+
+    If validate_api_key swallows ClientError and returns None, the
+    middleware negative-caches valid keys for 5s during any DynamoDB
+    throttling event — rolling 401 lockouts for legitimate traffic.
+    """
+    from botocore.exceptions import ClientError
+
+    from app.db.dynamodb import APIKeyManager
+
+    manager = APIKeyManager.__new__(APIKeyManager)
+    manager.table = MagicMock()
+    manager.table.get_item.side_effect = ClientError(
+        {"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}},
+        "GetItem",
+    )
+
+    with pytest.raises(ClientError):
+        manager.validate_api_key("sk-valid")
+
+
+def test_nested_mutation_does_not_poison_cache(monkeypatch):
+    """DynamoDB items carry nested mutables (metadata); a handler mutating
+    one must not leak into other requests' cached copies."""
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+    middleware.api_key_manager.validate_api_key.return_value = {
+        **VALID_INFO,
+        "metadata": {"team": "alpha"},
+    }
+
+    async def scenario():
+        _, info1 = await run_dispatch(middleware, "sk-valid")
+        info1["metadata"]["team"] = "tampered"
+        _, info2 = await run_dispatch(middleware, "sk-valid")
+        return info2
+
+    info2 = asyncio.run(scenario())
+    assert info2["metadata"]["team"] == "alpha"
+
+
+def test_validation_runs_on_dedicated_auth_executor(monkeypatch):
+    """Auth must not share the default executor with multi-second work
+    (Tavily web search, docker pulls) or cache misses queue behind them."""
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+    seen = {}
+
+    def record_thread(api_key):
+        seen["name"] = threading.current_thread().name
+        return VALID_INFO
+
+    middleware.api_key_manager.validate_api_key.side_effect = record_thread
+    asyncio.run(run_dispatch(middleware, "sk-valid"))
+
+    assert seen["name"].startswith("auth-validate")
+
+
+def test_concurrent_misses_share_one_lookup(monkeypatch):
+    """Single-flight: when a hot key's entry expires, concurrent misses
+    must coalesce into one DynamoDB read, not a thundering herd."""
+    import time as time_mod
+
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+
+    def slow_validate(api_key):
+        time_mod.sleep(0.2)
+        return VALID_INFO
+
+    middleware.api_key_manager.validate_api_key.side_effect = slow_validate
+
+    async def scenario():
+        results = await asyncio.gather(
+            run_dispatch(middleware, "sk-valid"),
+            run_dispatch(middleware, "sk-valid"),
+            run_dispatch(middleware, "sk-valid"),
+        )
+        return results
+
+    results = asyncio.run(scenario())
+
+    assert all(r.status_code == 200 for r, _ in results)
+    assert all(info["user_id"] == "u1" for _, info in results)
+    assert middleware.api_key_manager.validate_api_key.call_count == 1

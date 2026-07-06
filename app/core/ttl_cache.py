@@ -16,10 +16,12 @@ class TTLCache:
     ``get`` returns ``(hit, value)`` so a cached ``None`` (negative
     caching) is distinguishable from a miss.
 
-    Eviction is intentionally crude: when full, expired entries are
-    purged first; if the cache is still full, it is cleared entirely.
-    Entries are cheap to recompute (single DynamoDB reads), so
-    correctness and bounded memory matter more than hit-rate precision.
+    Eviction: when full, expired entries are purged first; if the cache
+    is still full, the soonest-expiring entries are dropped. Cache keys
+    are client-controlled input, and negative entries carry the shortest
+    TTLs — so spam evicts itself before it can evict hot positive
+    entries. Entries are cheap to recompute (single DynamoDB reads), so
+    bounded memory matters more than hit-rate precision.
     """
 
     def __init__(self, max_entries: int = 10_000):
@@ -57,10 +59,13 @@ class TTLCache:
             return len(self._entries)
 
     def _evict_locked(self) -> None:
-        """Purge expired entries; clear everything if still full."""
+        """Purge expired entries; drop the soonest-expiring if still full."""
         now = time.monotonic()
         expired = [k for k, (_, exp) in self._entries.items() if now >= exp]
         for k in expired:
             del self._entries[k]
         if len(self._entries) >= self._max_entries:
-            self._entries.clear()
+            n_drop = max(1, len(self._entries) // 10)
+            by_expiry = sorted(self._entries.items(), key=lambda kv: kv[1][1])
+            for k, _ in by_expiry[:n_drop]:
+                del self._entries[k]

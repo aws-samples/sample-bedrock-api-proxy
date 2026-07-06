@@ -76,17 +76,43 @@ def test_eviction_purges_expired_before_clearing(cache, monkeypatch):
     assert cache.get("new-2") == (True, "v")
 
 
-def test_eviction_clears_all_when_nothing_expired(cache):
-    """Crude overflow safety: with no expired entries, the cache resets."""
-    for i in range(4):
-        cache.set(f"k{i}", i, ttl_seconds=600)
+def test_eviction_drops_soonest_expiring_when_nothing_expired(cache):
+    """Overflow must not wipe hot entries: short-TTL (negative-cache spam)
+    entries are dropped first, long-lived positive entries survive."""
+    cache.set("short-1", "v", ttl_seconds=5)
+    cache.set("short-2", "v", ttl_seconds=5)
+    cache.set("long-1", "v", ttl_seconds=600)
+    cache.set("long-2", "v", ttl_seconds=600)
     cache.set("overflow", "v", ttl_seconds=600)
 
-    hit, value = cache.get("overflow")
-    assert hit is True
-    assert value == "v"
+    assert cache.get("overflow") == (True, "v")
+    assert cache.get("long-1") == (True, "v")
+    assert cache.get("long-2") == (True, "v")
     # Bound is respected: never more entries than max_entries
     assert len(cache) <= 4
+
+
+def test_exactly_at_expiry_is_miss(cache, monkeypatch):
+    """Pins the >= boundary: an entry is expired at exactly now + ttl."""
+    from app.core import ttl_cache as mod
+
+    now = 1000.0
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now)
+    cache.set("k", "v", ttl_seconds=60)
+
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now + 60)
+    assert cache.get("k") == (False, None)
+
+
+def test_just_before_expiry_is_hit(cache, monkeypatch):
+    from app.core import ttl_cache as mod
+
+    now = 1000.0
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now)
+    cache.set("k", "v", ttl_seconds=60)
+
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now + 59.999)
+    assert cache.get("k") == (True, "v")
 
 
 def test_concurrent_access_does_not_corrupt(cache):
