@@ -57,7 +57,7 @@ A lightweight API translation service that lets you use various large language m
 
 ### Advanced
 - **Programmatic Tool Calling (PTC)**: Claude generates and executes Python code in Docker sandbox for tool calling. Supports multi-round execution, `asyncio.gather` parallel calls, and session reuse.
-- **Web Search**: Proxy-side `web_search_20250305`/`web_search_20260209` via Tavily or Brave. Domain filtering, search limits, user location. Dynamic filtering version requires Docker.
+- **Web Search**: Proxy-side `web_search_20250305`/`web_search_20260209` via Tavily /Brave/ Bedrock AgentCore Gateway WebSearch. Domain filtering, search limits, user location. Dynamic filtering version requires Docker.
 - **[AgentCore Search MCP Server](agentcore-search-mcp/)**: Standalone MCP server ([PyPI](https://pypi.org/project/agentcore-search-mcp/): `uvx agentcore-search-mcp`) exposing Amazon Bedrock AgentCore Gateway WebSearch to any MCP client (Claude Code, Codex, Cursor) — a local stdio bridge that adds the SigV4 signing the gateway requires. Independent of the proxy; includes a one-shot gateway deployment script.
 - **Web Fetch**: Proxy-side `web_fetch_20250910`/`web_fetch_20260209` via httpx (no API key). PDF support. Dynamic filtering version requires Docker.
 - **Prompt Cache TTL**: Extends `cache_control` with configurable 1-hour TTL. Three-level priority: API key → request → env default.

@@ -60,7 +60,7 @@
 
 ### 高级功能
 - **Programmatic Tool Calling (PTC)**：Claude 在 Docker Sandbox 中生成并执行 Python 代码调用工具。支持多轮执行、`asyncio.gather` 并行调用、会话复用。
-- **Web 搜索**：代理端 `web_search_20250305`/`web_search_20260209`，支持 Tavily 或 Brave。域名过滤、搜索次数限制、用户位置。动态过滤版本需要 Docker。
+- **Web 搜索**：代理端 `web_search_20250305`/`web_search_20260209`，支持 Tavily，Brave 或Bedrock AgentCore Gateway WebSearch。域名过滤、搜索次数限制、用户位置。动态过滤版本需要 Docker。
 - **[AgentCore Search MCP Server](agentcore-search-mcp/README_ZH.md)**：独立的 MCP server（[PyPI](https://pypi.org/project/agentcore-search-mcp/)：`uvx agentcore-search-mcp`），把 Amazon Bedrock AgentCore Gateway WebSearch 暴露给任意 MCP 客户端（Claude Code、Codex、Cursor）——本地 stdio 桥，补上 gateway 要求的 SigV4 签名。与代理本体相互独立，自带 gateway 一键部署脚本。
 - **Web 抓取**：代理端 `web_fetch_20250910`/`web_fetch_20260209`，使用 httpx（无需 API Key）。支持 PDF。动态过滤版本需要 Docker。
 - **提示词缓存 TTL**：扩展 `cache_control` 支持 1 小时 TTL。三级优先级：API Key → 请求 → 环境变量默认值。
