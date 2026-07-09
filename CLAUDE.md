@@ -85,6 +85,7 @@ app/
 admin_portal/
 ├── backend/          # Separate FastAPI app (auth, dashboard, keys, pricing, model_mapping, providers, provider_keys, routing, failover, beta_headers)
 └── frontend/         # Static frontend (served at /admin/ in production)
+agentcore-search-mcp/ # Standalone MCP server exposing AgentCore Gateway WebSearch (see its README)
 ```
 
 ## Key Files

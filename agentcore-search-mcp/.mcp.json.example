@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agentcore-search": {
+      "command": "uvx",
+      "args": ["agentcore-search-mcp"],
+      "env": {
+        "AGENTCORE_GATEWAY_URL": "https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+        "AGENTCORE_GATEWAY_REGION": "us-east-1"
+      }
+    }
+  }
+}

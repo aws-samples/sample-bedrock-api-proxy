@@ -78,7 +78,7 @@ export class ECSStack extends cdk.Stack {
         subnetType: ec2.SubnetType.PUBLIC,
       },
       deletionProtection: false,
-      idleTimeout: cdk.Duration.seconds(600),
+      idleTimeout: cdk.Duration.seconds(1800),
     });
 
     // Create Target Group - target type depends on launch type
@@ -312,7 +312,7 @@ export class ECSStack extends cdk.Stack {
       }),
 
       // Streaming
-      STREAMING_TIMEOUT: '300',
+      STREAMING_TIMEOUT: '1800',
 
       // Bedrock Concurrency
       BEDROCK_THREAD_POOL_SIZE: config.bedrockThreadPoolSize.toString(),
