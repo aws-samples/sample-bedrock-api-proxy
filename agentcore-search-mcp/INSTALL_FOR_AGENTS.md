@@ -75,7 +75,27 @@ If the CLI form is unavailable, merge this into the project's `.mcp.json`:
 }
 ```
 
+## Step 5c — Alternative: Codex (CLI form)
+
+```bash
+codex mcp add agentcore-search \
+  --env AGENTCORE_GATEWAY_URL=<GATEWAY_URL> \
+  --env AGENTCORE_GATEWAY_REGION=us-east-1 \
+  -- uvx agentcore-search-mcp
+```
+
+Expected: `Added global MCP server 'agentcore-search'.` Note: Codex registers MCP servers globally (in `~/.codex/config.toml`), not per project. Equivalent config.toml block:
+
+```toml
+[mcp_servers.agentcore-search]
+command = "uvx"
+args = ["agentcore-search-mcp"]
+env = { AGENTCORE_GATEWAY_URL = "<GATEWAY_URL>", AGENTCORE_GATEWAY_REGION = "us-east-1" }
+```
+
 ## Step 6 — Verify registration
+
+Claude Code:
 
 ```bash
 claude mcp list
@@ -83,10 +103,18 @@ claude mcp list
 
 Expected: a line containing `agentcore-search` with status connected (✓). A restart of the client session may be required before the tool appears.
 
+Codex:
+
+```bash
+codex mcp list
+```
+
+Expected: a row for `agentcore-search` with command `uvx agentcore-search-mcp`, status `enabled` (env values display masked as `*****`).
+
 ## Step 7 — Functional check
 
 In the client session, invoke the tool: ask to "use the web_search tool to search for AWS Bedrock AgentCore". Expected: a `web_search` tool call returning a `results` array with `url`/`title`/`content` fields. If it errors with HTTP 403, see README.md → Troubleshooting.
 
 ## Appendix — Running from a source checkout instead of PyPI
 
-For development or an unpublished modification, replace `uvx agentcore-search-mcp` in Steps 5a/5b with `uv --directory <ABS_PATH_TO/agentcore-search-mcp> run agentcore-search-mcp` (JSON form: `"command": "uv", "args": ["--directory", "<ABS_PATH_TO/agentcore-search-mcp>", "run", "agentcore-search-mcp"]`), after running `uv sync` in that directory. `<ABS_PATH_TO/agentcore-search-mcp>` = absolute path of the checkout (run `pwd` inside it once).
+For development or an unpublished modification, replace `uvx agentcore-search-mcp` in Steps 5a–5c with `uv --directory <ABS_PATH_TO/agentcore-search-mcp> run agentcore-search-mcp` (JSON form: `"command": "uv", "args": ["--directory", "<ABS_PATH_TO/agentcore-search-mcp>", "run", "agentcore-search-mcp"]`), after running `uv sync` in that directory. `<ABS_PATH_TO/agentcore-search-mcp>` = absolute path of the checkout (run `pwd` inside it once).
