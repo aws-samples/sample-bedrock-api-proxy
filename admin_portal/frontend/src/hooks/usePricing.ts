@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { pricingApi } from '../services/api';
-import type { PricingCreate, PricingUpdate } from '../types';
+import type { PricingCreate, PricingUpdate, PricingSyncRequest } from '../types';
 
 export function usePricing(params?: {
   limit?: number;
@@ -58,6 +58,18 @@ export function useDeletePricing() {
 
   return useMutation({
     mutationFn: (modelId: string) => pricingApi.delete(modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pricing'] });
+      queryClient.invalidateQueries({ queryKey: ['pricingProviders'] });
+    },
+  });
+}
+
+export function useSyncPricing() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data?: PricingSyncRequest) => pricingApi.sync(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pricing'] });
       queryClient.invalidateQueries({ queryKey: ['pricingProviders'] });

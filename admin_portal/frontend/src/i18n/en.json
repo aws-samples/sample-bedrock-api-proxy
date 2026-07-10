@@ -224,7 +224,15 @@
     "confirmDelete": "Are you sure you want to delete this model pricing?",
     "pricingCreated": "Model pricing created successfully",
     "pricingUpdated": "Model pricing updated successfully",
-    "pricingDeleted": "Model pricing deleted successfully"
+    "pricingDeleted": "Model pricing deleted successfully",
+    "syncNow": "Sync from LiteLLM",
+    "syncing": "Syncing...",
+    "syncTooltip": "Pull latest model pricing from the LiteLLM price table",
+    "confirmSync": "Sync model pricing from the LiteLLM price table? Rows created by the sync will be updated; manually created or edited rows are left untouched.",
+    "syncCompleted": "Pricing sync completed",
+    "syncSummary": "{{sourceModels}} source models: {{created}} created, {{updated}} updated, {{unchanged}} unchanged.",
+    "syncSkippedManual": "{{count}} manually managed rows were skipped.",
+    "syncFailed": "Pricing sync failed"
   },
   "modelMapping": {
     "title": "Model Mapping",

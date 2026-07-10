@@ -6,8 +6,9 @@ import {
   useCreatePricing,
   useUpdatePricing,
   useDeletePricing,
+  useSyncPricing,
 } from '../hooks';
-import type { ModelPricing, PricingCreate, PricingUpdate } from '../types';
+import type { ModelPricing, PricingCreate, PricingUpdate, PricingSyncResult } from '../types';
 
 // Slide-over Panel Component
 function SlideOver({
@@ -287,6 +288,8 @@ export default function Pricing() {
   const [providerFilter, setProviderFilter] = useState<string>('');
   const [showCreatePanel, setShowCreatePanel] = useState(false);
   const [editingPricing, setEditingPricing] = useState<ModelPricing | null>(null);
+  const [syncResult, setSyncResult] = useState<PricingSyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const { data, isLoading, error } = usePricing({
     provider: providerFilter || undefined,
@@ -297,6 +300,19 @@ export default function Pricing() {
   const createMutation = useCreatePricing();
   const updateMutation = useUpdatePricing();
   const deleteMutation = useDeletePricing();
+  const syncMutation = useSyncPricing();
+
+  const handleSync = async () => {
+    if (!confirm(t('pricing.confirmSync'))) return;
+    setSyncResult(null);
+    setSyncError(null);
+    try {
+      const result = await syncMutation.mutateAsync(undefined);
+      setSyncResult(result);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const handleCreate = async (data: PricingCreate | PricingUpdate) => {
     await createMutation.mutateAsync(data as PricingCreate);
@@ -349,6 +365,21 @@ export default function Pricing() {
           <p className="text-slate-400 max-w-2xl text-base">{t('pricing.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleSync}
+            disabled={syncMutation.isPending}
+            className="h-10 px-4 rounded-lg bg-surface-dark border border-border-dark text-slate-200 font-medium text-sm flex items-center gap-2 hover:bg-border-dark transition-colors shadow-sm disabled:opacity-50"
+            title={t('pricing.syncTooltip')}
+          >
+            <span
+              className={`material-symbols-outlined text-[20px] ${
+                syncMutation.isPending ? 'animate-spin' : ''
+              }`}
+            >
+              sync
+            </span>
+            {syncMutation.isPending ? t('pricing.syncing') : t('pricing.syncNow')}
+          </button>
           <button className="h-10 px-4 rounded-lg bg-surface-dark border border-border-dark text-slate-200 font-medium text-sm flex items-center gap-2 hover:bg-border-dark transition-colors shadow-sm">
             <span className="material-symbols-outlined text-[20px]">file_upload</span>
             {t('pricing.importCsv')}
@@ -362,6 +393,54 @@ export default function Pricing() {
           </button>
         </div>
       </div>
+
+      {/* Sync Result Banner */}
+      {syncResult && (
+        <div className="bg-emerald-900/20 border border-emerald-700/50 rounded-xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-emerald-400 mt-0.5">check_circle</span>
+            <div className="text-sm text-slate-300">
+              <p className="font-medium text-emerald-300 mb-1">{t('pricing.syncCompleted')}</p>
+              <p>
+                {t('pricing.syncSummary', {
+                  sourceModels: syncResult.source_models,
+                  created: syncResult.created.length,
+                  updated: syncResult.updated.length,
+                  unchanged: syncResult.unchanged,
+                })}
+              </p>
+              {syncResult.skipped_manual.length > 0 && (
+                <p className="text-slate-400 mt-1">
+                  {t('pricing.syncSkippedManual', { count: syncResult.skipped_manual.length })}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => setSyncResult(null)}
+            className="text-slate-400 hover:text-slate-300 flex-shrink-0"
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+      )}
+      {syncError && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-red-400 mt-0.5">error</span>
+            <div className="text-sm text-slate-300">
+              <p className="font-medium text-red-300 mb-1">{t('pricing.syncFailed')}</p>
+              <p className="break-all">{syncError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSyncError(null)}
+            className="text-slate-400 hover:text-slate-300 flex-shrink-0"
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+      )}
 
       {/* Search & Filter */}
       <div className="bg-surface-dark p-4 rounded-xl border border-border-dark shadow-sm flex flex-col sm:flex-row gap-4 items-center justify-between">

@@ -224,7 +224,15 @@
     "confirmDelete": "您确定要删除此模型定价吗？",
     "pricingCreated": "模型定价创建成功",
     "pricingUpdated": "模型定价更新成功",
-    "pricingDeleted": "模型定价删除成功"
+    "pricingDeleted": "模型定价删除成功",
+    "syncNow": "从 LiteLLM 同步",
+    "syncing": "同步中...",
+    "syncTooltip": "从 LiteLLM 价格表拉取最新模型定价",
+    "confirmSync": "确定从 LiteLLM 价格表同步模型定价吗？由同步创建的条目将被更新；手动创建或编辑过的条目不会被覆盖。",
+    "syncCompleted": "定价同步完成",
+    "syncSummary": "源价格表 {{sourceModels}} 个模型：新建 {{created}} 个，更新 {{updated}} 个，无变化 {{unchanged}} 个。",
+    "syncSkippedManual": "已跳过 {{count}} 个手动管理的条目。",
+    "syncFailed": "定价同步失败"
   },
   "modelMapping": {
     "title": "模型映射",

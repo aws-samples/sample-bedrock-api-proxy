@@ -16,6 +16,8 @@ import type {
   PricingCreate,
   PricingUpdate,
   PricingListResponse,
+  PricingSyncRequest,
+  PricingSyncResult,
   DashboardStats,
   DailyUsageResponse,
   ModelMapping,
@@ -295,6 +297,13 @@ export const pricingApi = {
   delete: async (modelId: string): Promise<{ message: string }> => {
     return apiFetch(`/pricing/${encodeURIComponent(modelId)}`, {
       method: 'DELETE',
+    });
+  },
+
+  sync: async (data?: PricingSyncRequest): Promise<PricingSyncResult> => {
+    return apiFetch('/pricing/sync', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
     });
   },
 };
