@@ -118,6 +118,7 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 - **Cache TTL**: Extends `cache_control` with configurable TTL (5m or 1h). Priority: API key → request → env → default.
 - **OpenTelemetry Tracing**: OTEL GenAI semantic conventions, session-based trace grouping. Zero overhead when disabled.
 - **Admin Portal**: Separate FastAPI app for API key/usage/pricing management with Cognito auth.
+- **Model Pricing Sync**: Pulls model pricing from the LiteLLM price table (periodic background task in the admin portal, `POST /api/pricing/sync`, or `scripts/sync_model_pricing.py`). Synced rows are marked `pricing_source="litellm"`; manual/portal-edited rows are never overwritten unless forced. Controlled by `PRICING_SYNC_*` settings.
 - **OpenAI-Compatible API**: Non-Claude models can optionally use Bedrock's OpenAI Chat Completions API via bedrock-mantle endpoint instead of Converse API. Controlled by `ENABLE_OPENAI_COMPAT` flag. Maps `thinking` to OpenAI `reasoning` with configurable effort thresholds.
 - **OpenAI Passthrough**: New `/openai/v1/*` endpoints accept OpenAI-native Chat Completions and Responses API requests and forward them to bedrock-mantle. Distinct from `ENABLE_OPENAI_COMPAT` (which routes Anthropic-format requests on `/v1/messages`). Reuses proxy API key auth, rate limits, budgets, and usage tracking. Controlled by `ENABLE_OPENAI_PASSTHROUGH`.
 - **Multi-Provider Gateway**: Optional gateway layer for multiple Bedrock accounts/providers — routing engine (rule/cost/quality/RouteLLM smart routing), encrypted key pool with rotation + cross-model failover, and context compression. Managed via admin portal (`providers`, `provider_keys`, `routing`, `failover`). Controlled by `MULTI_PROVIDER_ENABLED` and sub-flags. See [docs/smart-routing-guide.md](docs/smart-routing-guide.md).
@@ -184,6 +185,8 @@ Key CDK files: `cdk/config/config.ts`, `cdk/lib/ecs-stack.ts`, `cdk/scripts/depl
 **OpenAI-Compat:** `ENABLE_OPENAI_COMPAT`, `ENABLE_OPENAI_PASSTHROUGH`, `BEDROCK_API_KEY`, `MANTLE_ENDPOINT_URL`, `OPENAI_COMPAT_THINKING_HIGH_THRESHOLD`, `OPENAI_COMPAT_THINKING_MEDIUM_THRESHOLD`
 
 **Multi-Provider Gateway:** `MULTI_PROVIDER_ENABLED`, `ROUTING_ENABLED`, `SMART_ROUTING_ENABLED`, `FAILOVER_ENABLED`, `COMPRESSION_ENABLED`, `CACHE_AWARE_ROUTING_ENABLED`, `PROVIDER_KEY_ENCRYPTION_SECRET`
+
+**Model Pricing Sync:** `PRICING_SYNC_ENABLED`, `PRICING_SYNC_URL`, `PRICING_SYNC_INTERVAL_HOURS`, `PRICING_SYNC_PROVIDERS`, `PRICING_SYNC_CREATE_MISSING`, `PRICING_SYNC_OVERWRITE_MANUAL`
 
 See `.env.example` for full list including PTC, web search, web fetch, cache TTL, tracing, beta header, and multi-provider settings.
 

@@ -467,6 +467,40 @@ In production (ECS), the admin portal frontend is served as static files from th
 
 ---
 
+## Model Pricing Sync (LiteLLM)
+
+Pulls model pricing from the [LiteLLM price table](https://github.com/BerriAI/litellm/blob/litellm_internal_staging/model_prices_and_context_window.json) into the `anthropic-proxy-model-pricing` DynamoDB table, replacing manual per-model price entry.
+
+### How it works
+
+- Core logic: `app/services/pricing_sync_service.py`. Fetches the JSON (URL configurable via `PRICING_SYNC_URL`), keeps entries whose `litellm_provider` is in `PRICING_SYNC_PROVIDERS` (default `bedrock,bedrock_converse,bedrock_mantle`) and whose `mode` is chat/responses, and converts per-token costs to the table's USD-per-1M-tokens unit (input/output/cache read/cache write).
+- LiteLLM keys are used as Bedrock model IDs as-is, including region-prefixed variants (`us.`, `eu.`, `global.`, ...). `bedrock_mantle/<id>` keys are stripped to `<id>` (the model ID the OpenAI passthrough uses); other keys containing `/` are LiteLLM aliases and skipped.
+- Existing rows whose exact ID isn't in the source (e.g. a `global.` variant LiteLLM doesn't list) are matched by stripping the region prefix, then trying the `us.` variant. Model-mapping targets (`DEFAULT_MODEL_MAPPING` + the mapping table) get pricing rows created the same way, so cost tracking works for the IDs the proxy actually resolves to.
+- **Manual rows are safe by default**: rows created by the sync carry `pricing_source="litellm"` and are refreshed on later runs; rows without the marker (created manually, or price-edited in the admin portal — editing clears the marker) are skipped unless `PRICING_SYNC_OVERWRITE_MANUAL=True` / `overwrite_manual: true`. Rows are never deleted.
+
+### Triggers
+
+| Trigger | How |
+|---|---|
+| Periodic | Background task in the admin portal backend (`admin_portal/backend/services/pricing_sync.py`); enable with `PRICING_SYNC_ENABLED=True`, interval via `PRICING_SYNC_INTERVAL_HOURS` (default 24) |
+| Manual (API) | `POST /api/pricing/sync` on the admin portal — body (optional): `{"url", "create_missing", "overwrite_manual", "dry_run"}` |
+| Manual (CLI) | `uv run python scripts/sync_model_pricing.py [--dry-run] [--overwrite-manual] [--no-create-missing] [--url ...]` |
+
+All three return/print a summary: `created`, `updated`, `unchanged`, `skipped_manual`, `not_found` (mapped models the source has no pricing for). Use `dry_run` to preview before the first real sync.
+
+### Configuration
+
+```bash
+PRICING_SYNC_ENABLED=False            # periodic sync in the admin portal
+PRICING_SYNC_URL=https://raw.githubusercontent.com/BerriAI/litellm/litellm_internal_staging/model_prices_and_context_window.json
+PRICING_SYNC_INTERVAL_HOURS=24
+PRICING_SYNC_PROVIDERS=bedrock,bedrock_converse,bedrock_mantle
+PRICING_SYNC_CREATE_MISSING=True      # create rows for source models not in the table
+PRICING_SYNC_OVERWRITE_MANUAL=False   # never overwrite manual rows unless True
+```
+
+---
+
 ## OpenAI Passthrough
 
 Adds new `/openai/v1/*` endpoints that accept OpenAI-native API formats and call `bedrock-mantle`. Distinct from `ENABLE_OPENAI_COMPAT` (which converts Anthropic-format requests on `/v1/messages` into OpenAI calls).

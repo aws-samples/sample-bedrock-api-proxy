@@ -1216,6 +1216,7 @@ class ModelPricingManager:
         cache_write_price: Optional[Union[float, Decimal]] = None,
         display_name: Optional[str] = None,
         status: str = "active",
+        pricing_source: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a new model pricing entry.
@@ -1229,6 +1230,7 @@ class ModelPricingManager:
             cache_write_price: Cache write price per 1M tokens in USD
             display_name: Human-readable model name
             status: Model status ("active", "deprecated", "disabled")
+            pricing_source: Origin of the prices ("litellm" for synced rows; absent means manually managed)
 
         Returns:
             Created pricing item
@@ -1253,6 +1255,8 @@ class ModelPricingManager:
             "created_at": timestamp,
             "updated_at": timestamp,
         }
+        if pricing_source:
+            item["pricing_source"] = pricing_source
 
         self.table.put_item(Item=item)
         return item
@@ -1283,6 +1287,7 @@ class ModelPricingManager:
         display_name: Optional[str] = None,
         status: Optional[str] = None,
         provider: Optional[str] = None,
+        pricing_source: Optional[str] = None,
     ) -> bool:
         """
         Update model pricing.
@@ -1296,6 +1301,7 @@ class ModelPricingManager:
             display_name: New display name
             status: New status
             provider: New provider name
+            pricing_source: New pricing source ("litellm" or "manual")
 
         Returns:
             True if updated successfully
@@ -1336,6 +1342,10 @@ class ModelPricingManager:
         if provider is not None:
             update_parts.append("provider = :provider")
             expression_values[":provider"] = provider
+
+        if pricing_source is not None:
+            update_parts.append("pricing_source = :pricing_source")
+            expression_values[":pricing_source"] = pricing_source
 
         if not update_parts:
             return False

@@ -1,18 +1,23 @@
 """Model Pricing management routes."""
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.db.dynamodb import DynamoDBClient, ModelPricingManager
+from app.services.pricing_sync_service import run_sync
 from admin_portal.backend.schemas.pricing import (
     PricingCreate,
     PricingUpdate,
     PricingResponse,
     PricingListResponse,
+    PricingSyncRequest,
+    PricingSyncResponse,
 )
 
 router = APIRouter()
@@ -80,6 +85,40 @@ async def list_providers():
     providers.sort()
 
     return {"providers": providers}
+
+
+@router.post("/sync", response_model=PricingSyncResponse)
+async def sync_pricing(request: Optional[PricingSyncRequest] = None):
+    """
+    Sync model pricing from the LiteLLM price table (manual trigger).
+
+    Rows created by the sync are marked pricing_source="litellm" and refreshed
+    on later runs; manually created or portal-edited rows are skipped unless
+    overwrite_manual is set. Use dry_run to preview changes.
+    """
+    request = request or PricingSyncRequest()
+    try:
+        summary = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: run_sync(
+                url=request.url,
+                create_missing=request.create_missing,
+                overwrite_manual=request.overwrite_manual,
+                dry_run=request.dry_run,
+            ),
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch pricing source: {e}",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        )
+
+    return PricingSyncResponse(**summary)
 
 
 @router.get("/{model_id:path}", response_model=PricingResponse)
@@ -156,6 +195,10 @@ async def update_pricing(model_id: str, request: PricingUpdate):
     # Update pricing
     update_data = request.model_dump(exclude_none=True)
     if update_data:
+        # A manual price edit takes the row out of LiteLLM sync management
+        price_fields = {"input_price", "output_price", "cache_read_price", "cache_write_price"}
+        if price_fields & update_data.keys() and existing.get("pricing_source") == "litellm":
+            update_data["pricing_source"] = "manual"
         success = pricing_manager.update_pricing(model_id, **update_data)
         if not success:
             raise HTTPException(

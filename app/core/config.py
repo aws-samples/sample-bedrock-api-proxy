@@ -483,6 +483,37 @@ class Settings(BaseSettings):
         description="Mount /openai/v1/* endpoints (Chat Completions + Responses passthrough to bedrock-mantle)"
     )
 
+    # === Model Pricing Sync (LiteLLM) ===
+    pricing_sync_enabled: bool = Field(
+        default=False, alias="PRICING_SYNC_ENABLED",
+        description="Periodically sync model pricing from the LiteLLM price table (background task in the admin portal)"
+    )
+    pricing_sync_url: str = Field(
+        default=(
+            "https://raw.githubusercontent.com/BerriAI/litellm/"
+            "litellm_internal_staging/model_prices_and_context_window.json"
+        ),
+        alias="PRICING_SYNC_URL",
+        description="URL of the LiteLLM model_prices_and_context_window.json to sync from"
+    )
+    pricing_sync_interval_hours: float = Field(
+        default=24.0, alias="PRICING_SYNC_INTERVAL_HOURS",
+        description="Interval between automatic pricing syncs, in hours"
+    )
+    pricing_sync_providers: List[str] = Field(
+        default=["bedrock", "bedrock_converse", "bedrock_mantle"],
+        alias="PRICING_SYNC_PROVIDERS",
+        description="litellm_provider values to import pricing for"
+    )
+    pricing_sync_create_missing: bool = Field(
+        default=True, alias="PRICING_SYNC_CREATE_MISSING",
+        description="Create pricing rows for source models missing from the table (otherwise only update existing rows)"
+    )
+    pricing_sync_overwrite_manual: bool = Field(
+        default=False, alias="PRICING_SYNC_OVERWRITE_MANUAL",
+        description="Allow sync to overwrite pricing rows that were not created by the sync"
+    )
+
     # === Multi-Provider Gateway Feature Flags ===
     multi_provider_enabled: bool = Field(
         default=False, alias="MULTI_PROVIDER_ENABLED",
@@ -555,7 +586,7 @@ class Settings(BaseSettings):
         default="anthropic-proxy-smart-routing-config", alias="DYNAMODB_SMART_ROUTING_CONFIG_TABLE"
     )
 
-    @field_validator("cors_origins", "cors_allow_methods", "cors_allow_headers", mode="before")
+    @field_validator("cors_origins", "cors_allow_methods", "cors_allow_headers", "pricing_sync_providers", mode="before")
     @classmethod
     def parse_list_fields(cls, v: Any) -> List[str]:
         """Parse list fields from comma-separated string or return as-is."""
