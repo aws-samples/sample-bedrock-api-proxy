@@ -163,3 +163,7 @@ AGENTCORE_GATEWAY_URL=https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.a
 - Queries are truncated to **200 characters** (gateway limit).
 - At most **25 results** per call.
 - `allowed_domains` / `blocked_domains` / user-location filtering are not supported by the AgentCore Web Search connector.
+
+---
+
+⭐ If this tool is useful to you, please consider [starring the repo](https://github.com/aws-samples/sample-bedrock-api-proxy) — it helps others discover it.

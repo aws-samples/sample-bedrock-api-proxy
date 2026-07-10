@@ -470,3 +470,7 @@ black app tests && ruff check app tests && mypy app
 ## 许可证
 
 MIT-0
+
+---
+
+⭐ 如果这个项目对你有帮助，欢迎给[本仓库](https://github.com/aws-samples/sample-bedrock-api-proxy)点个 star，让更多人发现它。

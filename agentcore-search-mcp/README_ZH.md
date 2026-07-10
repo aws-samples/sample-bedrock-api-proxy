@@ -163,3 +163,7 @@ AGENTCORE_GATEWAY_URL=https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.a
 - 查询会被截断到 **200 个字符**（gateway 限制）。
 - 每次调用最多 **25 条**结果。
 - AgentCore Web Search connector 不支持 `allowed_domains` / `blocked_domains` / 用户位置过滤。
+
+---
+
+⭐ 如果这个工具对你有帮助，欢迎给[本仓库](https://github.com/aws-samples/sample-bedrock-api-proxy)点个 star，让更多人发现它。

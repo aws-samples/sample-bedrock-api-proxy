@@ -469,3 +469,7 @@ Contributions are welcome! Please fork, create a feature branch, add tests, and 
 ## License
 
 MIT-0
+
+---
+
+⭐ If this project is useful to you, please consider [starring the repo](https://github.com/aws-samples/sample-bedrock-api-proxy) — it helps others discover it.
