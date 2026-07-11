@@ -130,6 +130,11 @@
     "revokeKey": "Revoke Key",
     "reactivate": "Reactivate",
     "deletePermanently": "Delete Permanently",
+    "hoverChart": {
+      "costTitle": "Cost — Last 7 Days",
+      "tokensTitle": "Tokens — Last 7 Days",
+      "noData": "No usage in the last 7 days"
+    },
     "form": {
       "createTitle": "Create New API Key",
       "editTitle": "Edit API Key",

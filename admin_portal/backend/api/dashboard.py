@@ -48,6 +48,77 @@ def _list_all_api_key_items(
             return items
 
 
+def build_pricing_cache(pricing_manager: ModelPricingManager) -> dict[str, dict]:
+    """Build a pricing cache keyed by Bedrock model ID."""
+    pricing_cache: dict[str, dict] = {}
+    for item in _list_all_pricing_items(pricing_manager):
+        model_id = item.get("model_id", "")
+        if model_id:
+            pricing_cache[model_id] = item
+    return pricing_cache
+
+
+def build_model_mapping_cache(db_client: DynamoDBClient) -> dict[str, str]:
+    """Build an Anthropic → Bedrock model ID map from custom DynamoDB mappings."""
+    model_mapping_cache: dict[str, str] = {}
+    try:
+        model_mapping_manager = ModelMappingManager(db_client)
+        for mapping in model_mapping_manager.list_mappings():
+            anthropic_id = mapping.get("anthropic_model_id", "")
+            bedrock_id = mapping.get("bedrock_model_id", "")
+            if anthropic_id and bedrock_id:
+                model_mapping_cache[anthropic_id] = bedrock_id
+    except Exception as e:
+        print(f"[Dashboard] Error loading model mappings: {e}")
+    return model_mapping_cache
+
+
+def build_daily_usage_response(
+    buckets: dict[str, dict[str, dict]],
+    start_dt: datetime,
+    end_dt: datetime,
+    days: int,
+) -> DailyUsageResponse:
+    """Zero-fill per-day buckets into a DailyUsageResponse with a continuous axis."""
+    daily: list[DailyUsage] = []
+    for offset in range(days):
+        day_dt = start_dt + timedelta(days=offset)
+        date_str = day_dt.strftime("%Y-%m-%d")
+        day_models = buckets.get(date_str, {})
+
+        models = [
+            DailyModelUsage(
+                model=model,
+                input_tokens=int(stats["input_tokens"]),
+                output_tokens=int(stats["output_tokens"]),
+                tokens=int(stats["tokens"]),
+                cost=round(float(stats["cost"]), 6),
+                requests=int(stats["requests"]),
+            )
+            # Largest spend first so stacked bars/legend read top-down by cost.
+            for model, stats in sorted(
+                day_models.items(), key=lambda kv: kv[1]["cost"], reverse=True
+            )
+        ]
+        total_tokens = sum(m.tokens for m in models)
+        total_cost = round(sum(m.cost for m in models), 6)
+        daily.append(
+            DailyUsage(
+                date=date_str,
+                total_tokens=total_tokens,
+                total_cost=total_cost,
+                models=models,
+            )
+        )
+
+    return DailyUsageResponse(
+        days=days,
+        start_date=start_dt.strftime("%Y-%m-%d"),
+        end_date=end_dt.strftime("%Y-%m-%d"),
+        daily=daily,
+    )
+
+
 def _parse_timestamp(value: Union[int, str, None]) -> int:
     """
     Parse a timestamp value that can be either an integer (Unix timestamp)
@@ -244,23 +315,10 @@ async def get_daily_usage(days: int = Query(default=30, ge=1, le=90)):
     since_timestamp = int(start_dt.timestamp() * 1000)  # ms, matches table schema
 
     # Build pricing cache (keyed by Bedrock model ID)
-    pricing_cache: dict[str, dict] = {}
-    for item in _list_all_pricing_items(pricing_manager):
-        model_id = item.get("model_id", "")
-        if model_id:
-            pricing_cache[model_id] = item
+    pricing_cache = build_pricing_cache(pricing_manager)
 
     # Build model mapping cache (Anthropic -> Bedrock) from custom mappings
-    model_mapping_cache: dict[str, str] = {}
-    try:
-        model_mapping_manager = ModelMappingManager(db_client)
-        for mapping in model_mapping_manager.list_mappings():
-            anthropic_id = mapping.get("anthropic_model_id", "")
-            bedrock_id = mapping.get("bedrock_model_id", "")
-            if anthropic_id and bedrock_id:
-                model_mapping_cache[anthropic_id] = bedrock_id
-    except Exception as e:
-        print(f"[Dashboard] Error loading model mappings: {e}")
+    model_mapping_cache = build_model_mapping_cache(db_client)
 
     # Collect all API keys to scan
     all_keys = _list_all_api_key_items(api_key_manager)
@@ -280,40 +338,4 @@ async def get_daily_usage(days: int = Query(default=30, ge=1, le=90)):
     )
 
     # Zero-fill every day in the window so the chart has a continuous axis.
-    daily: list[DailyUsage] = []
-    for offset in range(days):
-        day_dt = start_dt + timedelta(days=offset)
-        date_str = day_dt.strftime("%Y-%m-%d")
-        day_models = buckets.get(date_str, {})
-
-        models = [
-            DailyModelUsage(
-                model=model,
-                input_tokens=int(stats["input_tokens"]),
-                output_tokens=int(stats["output_tokens"]),
-                tokens=int(stats["tokens"]),
-                cost=round(float(stats["cost"]), 6),
-                requests=int(stats["requests"]),
-            )
-            # Largest spend first so stacked bars/legend read top-down by cost.
-            for model, stats in sorted(
-                day_models.items(), key=lambda kv: kv[1]["cost"], reverse=True
-            )
-        ]
-        total_tokens = sum(m.tokens for m in models)
-        total_cost = round(sum(m.cost for m in models), 6)
-        daily.append(
-            DailyUsage(
-                date=date_str,
-                total_tokens=total_tokens,
-                total_cost=total_cost,
-                models=models,
-            )
-        )
-
-    return DailyUsageResponse(
-        days=days,
-        start_date=start_dt.strftime("%Y-%m-%d"),
-        end_date=now.strftime("%Y-%m-%d"),
-        daily=daily,
-    )
+    return build_daily_usage_response(buckets, start_dt, now, days)

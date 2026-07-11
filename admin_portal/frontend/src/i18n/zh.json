@@ -130,6 +130,11 @@
     "revokeKey": "撤销密钥",
     "reactivate": "重新激活",
     "deletePermanently": "永久删除",
+    "hoverChart": {
+      "costTitle": "最近 7 天费用",
+      "tokensTitle": "最近 7 天令牌用量",
+      "noData": "最近 7 天无使用记录"
+    },
     "form": {
       "createTitle": "创建新 API 密钥",
       "editTitle": "编辑 API 密钥",

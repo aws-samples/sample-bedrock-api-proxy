@@ -12,6 +12,7 @@ import {
 } from '../hooks';
 import type { ApiKey, ApiKeyCreate, ApiKeyUpdate } from '../types';
 import { formatTokens, cacheHitRate, formatCacheHitRate } from '../utils';
+import UsageHoverChart from '../components/UsageHoverChart';
 
 // Modal Component
 function Modal({
@@ -699,98 +700,102 @@ export default function ApiKeys() {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="material-symbols-outlined text-[14px] text-emerald-500">
-                              arrow_upward
+                        <UsageHoverChart apiKey={key.api_key} metric="tokens">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-[14px] text-emerald-500">
+                                arrow_upward
+                              </span>
+                              <span className="text-xs text-white font-medium">
+                                {formatTokens(key.total_input_tokens)}
+                              </span>
+                              <span className="text-xs text-slate-500">{t('apiKeys.inputTokens')}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-[14px] text-blue-400">
+                                arrow_downward
+                              </span>
+                              <span className="text-xs text-white font-medium">
+                                {formatTokens(key.total_output_tokens)}
+                              </span>
+                              <span className="text-xs text-slate-500">{t('apiKeys.outputTokens')}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-[14px] text-purple-400">
+                                cached
+                              </span>
+                              <span className="text-xs text-white font-medium">
+                                {formatTokens(key.total_cached_tokens)}
+                              </span>
+                              <span className="text-xs text-slate-500">{t('apiKeys.cacheRead')}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-[14px] text-amber-400">
+                                edit_note
+                              </span>
+                              <span className="text-xs text-white font-medium">
+                                {formatTokens(key.total_cache_write_tokens)}
+                              </span>
+                              <span className="text-xs text-slate-500">{t('apiKeys.cacheWrite')}</span>
+                            </div>
+                            <div className="flex items-center gap-2" title={t('apiKeys.cacheHitRateTooltip')}>
+                              <span className="material-symbols-outlined text-[14px] text-cyan-400">
+                                speed
+                              </span>
+                              <span
+                                className={`text-xs font-semibold ${
+                                  hitRate === null
+                                    ? 'text-slate-400'
+                                    : hitRate >= 70
+                                    ? 'text-emerald-400'
+                                    : hitRate >= 40
+                                    ? 'text-amber-400'
+                                    : 'text-red-400'
+                                }`}
+                              >
+                                {formatCacheHitRate(hitRate)}
+                              </span>
+                              <span className="text-xs text-slate-500">{t('apiKeys.cacheHitRate')}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500">
+                              {(key.total_requests || 0).toLocaleString()} {t('apiKeys.requests')}
                             </span>
-                            <span className="text-xs text-white font-medium">
-                              {formatTokens(key.total_input_tokens)}
-                            </span>
-                            <span className="text-xs text-slate-500">{t('apiKeys.inputTokens')}</span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="material-symbols-outlined text-[14px] text-blue-400">
-                              arrow_downward
-                            </span>
-                            <span className="text-xs text-white font-medium">
-                              {formatTokens(key.total_output_tokens)}
-                            </span>
-                            <span className="text-xs text-slate-500">{t('apiKeys.outputTokens')}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="material-symbols-outlined text-[14px] text-purple-400">
-                              cached
-                            </span>
-                            <span className="text-xs text-white font-medium">
-                              {formatTokens(key.total_cached_tokens)}
-                            </span>
-                            <span className="text-xs text-slate-500">{t('apiKeys.cacheRead')}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="material-symbols-outlined text-[14px] text-amber-400">
-                              edit_note
-                            </span>
-                            <span className="text-xs text-white font-medium">
-                              {formatTokens(key.total_cache_write_tokens)}
-                            </span>
-                            <span className="text-xs text-slate-500">{t('apiKeys.cacheWrite')}</span>
-                          </div>
-                          <div className="flex items-center gap-2" title={t('apiKeys.cacheHitRateTooltip')}>
-                            <span className="material-symbols-outlined text-[14px] text-cyan-400">
-                              speed
-                            </span>
-                            <span
-                              className={`text-xs font-semibold ${
-                                hitRate === null
-                                  ? 'text-slate-400'
-                                  : hitRate >= 70
-                                  ? 'text-emerald-400'
-                                  : hitRate >= 40
-                                  ? 'text-amber-400'
-                                  : 'text-red-400'
-                              }`}
-                            >
-                              {formatCacheHitRate(hitRate)}
-                            </span>
-                            <span className="text-xs text-slate-500">{t('apiKeys.cacheHitRate')}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-500">
-                            {(key.total_requests || 0).toLocaleString()} {t('apiKeys.requests')}
-                          </span>
-                        </div>
+                        </UsageHoverChart>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap align-middle">
-                        <div className="w-full flex flex-col gap-1.5">
-                          <div className="flex justify-between text-xs">
-                            <span className="text-white font-medium">
-                              ${mtdBudget.toFixed(2)}
-                            </span>
-                            <span className="text-slate-500">
-                              of ${(key.monthly_budget || 0).toFixed(2)}
-                            </span>
+                        <UsageHoverChart apiKey={key.api_key} metric="cost">
+                          <div className="w-full flex flex-col gap-1.5">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-white font-medium">
+                                ${mtdBudget.toFixed(2)}
+                              </span>
+                              <span className="text-slate-500">
+                                of ${(key.monthly_budget || 0).toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="w-full bg-border-dark h-2 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  usedPercent >= 100
+                                    ? 'bg-red-500'
+                                    : usedPercent > 90
+                                    ? 'bg-red-500'
+                                    : usedPercent > 75
+                                    ? 'bg-orange-500'
+                                    : 'bg-primary'
+                                }`}
+                                style={{ width: `${Math.min(usedPercent, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] text-slate-500">
+                              <span>{usedPercent}% {t('apiKeys.used')}</span>
+                              <span title={t('apiKeys.totalBudgetUsed')}>
+                                {t('apiKeys.total')}: ${(key.budget_used || 0).toFixed(2)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="w-full bg-border-dark h-2 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                usedPercent >= 100
-                                  ? 'bg-red-500'
-                                  : usedPercent > 90
-                                  ? 'bg-red-500'
-                                  : usedPercent > 75
-                                  ? 'bg-orange-500'
-                                  : 'bg-primary'
-                              }`}
-                              style={{ width: `${Math.min(usedPercent, 100)}%` }}
-                            ></div>
-                          </div>
-                          <div className="flex justify-between text-[10px] text-slate-500">
-                            <span>{usedPercent}% {t('apiKeys.used')}</span>
-                            <span title={t('apiKeys.totalBudgetUsed')}>
-                              {t('apiKeys.total')}: ${(key.budget_used || 0).toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
+                        </UsageHoverChart>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {(() => {

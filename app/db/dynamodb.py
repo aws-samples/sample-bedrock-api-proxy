@@ -1821,7 +1821,9 @@ class UsageStatsManager:
                     if not last_key:
                         break
             except ClientError as e:
-                print(f"Error aggregating daily usage for {api_key}: {e}")
+                # Never log API key material (CodeQL: clear-text logging /
+                # weak hashing). The ClientError itself carries enough context.
+                print(f"Error aggregating daily usage for one of the API keys: {e}")
 
         return buckets
 
