@@ -4,7 +4,6 @@ DynamoDB client and table management.
 Provides interfaces for interacting with DynamoDB tables for API keys,
 usage tracking, and model mapping.
 """
-import hashlib
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -1822,9 +1821,9 @@ class UsageStatsManager:
                     if not last_key:
                         break
             except ClientError as e:
-                # Never log API key material — identify the key by hash digest only
-                key_digest = hashlib.sha256(api_key.encode()).hexdigest()[:12]
-                print(f"Error aggregating daily usage for key sha256:{key_digest}: {e}")
+                # Never log API key material (CodeQL: clear-text logging /
+                # weak hashing). The ClientError itself carries enough context.
+                print(f"Error aggregating daily usage for one of the API keys: {e}")
 
         return buckets
 
