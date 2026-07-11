@@ -1821,7 +1821,8 @@ class UsageStatsManager:
                     if not last_key:
                         break
             except ClientError as e:
-                print(f"Error aggregating daily usage for {api_key}: {e}")
+                # Log only a key prefix — full API keys must not appear in logs
+                print(f"Error aggregating daily usage for {api_key[:20]}...: {e}")
 
         return buckets
 
