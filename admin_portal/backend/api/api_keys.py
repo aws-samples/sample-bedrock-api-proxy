@@ -1,5 +1,6 @@
 """API Keys management routes."""
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -7,13 +8,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.db.dynamodb import DynamoDBClient, APIKeyManager, UsageTracker, UsageStatsManager
+from app.db.dynamodb import (
+    DynamoDBClient,
+    APIKeyManager,
+    ModelPricingManager,
+    UsageTracker,
+    UsageStatsManager,
+)
 from admin_portal.backend.schemas.api_key import (
     ApiKeyCreate,
     ApiKeyUpdate,
     ApiKeyResponse,
     ApiKeyListResponse,
 )
+from admin_portal.backend.schemas.dashboard import DailyUsageResponse
 
 router = APIRouter()
 
@@ -321,3 +329,52 @@ async def get_api_key_usage(api_key: str):
         },
         "recent": recent_stats,
     }
+
+
+@router.get("/{api_key}/daily-usage", response_model=DailyUsageResponse)
+async def get_api_key_daily_usage(
+    api_key: str,
+    days: int = Query(default=7, ge=1, le=90),
+):
+    """
+    Get per-day token usage and cost for a single API key over the last N days.
+
+    Aggregates raw usage records on the fly, bucketed by UTC day, using the
+    same pricing/model-mapping logic as the dashboard daily-usage endpoint.
+    Used by the hover thumbnail charts on the API Keys page.
+    """
+    # Shared helpers with the dashboard endpoint (single aggregation code path)
+    from admin_portal.backend.api.dashboard import (
+        build_pricing_cache,
+        build_model_mapping_cache,
+        build_daily_usage_response,
+    )
+
+    api_key_manager, _, usage_stats_manager = get_managers()
+
+    existing = api_key_manager.get_api_key(api_key)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key not found",
+        )
+
+    db_client = DynamoDBClient()
+    pricing_manager = ModelPricingManager(db_client)
+
+    # Window: [start_of_day(now - (days-1)), now], inclusive of today (UTC).
+    now = datetime.now(timezone.utc)
+    start_dt = (now - timedelta(days=days - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    since_timestamp = int(start_dt.timestamp() * 1000)  # ms, matches table schema
+
+    buckets = usage_stats_manager.aggregate_daily_usage(
+        [api_key],
+        since_timestamp=since_timestamp,
+        pricing_cache=build_pricing_cache(pricing_manager),
+        model_mapping_cache=build_model_mapping_cache(db_client),
+        service_tier_cache={api_key: existing.get("service_tier", "default")},
+    )
+
+    return build_daily_usage_response(buckets, start_dt, now, days)

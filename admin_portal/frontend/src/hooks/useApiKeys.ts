@@ -29,6 +29,20 @@ export function useApiKeyUsage(apiKey: string) {
   });
 }
 
+/**
+ * Per-key daily usage for the hover thumbnail charts.
+ * Fetched lazily (enabled=false until hover) and cached for 5 minutes
+ * so repeated hovers don't re-scan the usage table.
+ */
+export function useApiKeyDailyUsage(apiKey: string, days = 7, enabled = true) {
+  return useQuery({
+    queryKey: ['apiKeyDailyUsage', apiKey, days],
+    queryFn: () => apiKeysApi.getDailyUsage(apiKey, days),
+    enabled: enabled && !!apiKey,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useCreateApiKey() {
   const queryClient = useQueryClient();
 

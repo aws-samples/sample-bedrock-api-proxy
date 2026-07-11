@@ -252,6 +252,10 @@ export const apiKeysApi = {
   getUsage: async (apiKey: string): Promise<ApiKeyUsage> => {
     return apiFetch(`/keys/${encodeURIComponent(apiKey)}/usage`);
   },
+
+  getDailyUsage: async (apiKey: string, days: number = 7): Promise<DailyUsageResponse> => {
+    return apiFetch(`/keys/${encodeURIComponent(apiKey)}/daily-usage?days=${days}`);
+  },
 };
 
 // Pricing API
