@@ -1732,9 +1732,12 @@ class UsageStatsManager:
         """Aggregate raw usage records into per-day, per-model buckets.
 
         Scans the usage table for each API key (records newer than
-        ``since_timestamp``) and groups by ``(UTC date, model)``. Token totals
-        follow the Anthropic display convention; cost reuses ``_record_cost`` so
-        billing matches the cumulative aggregation exactly.
+        ``since_timestamp``) and groups by ``(UTC date, Bedrock model ID)``.
+        Recorded model IDs (e.g. Anthropic aliases) are resolved to their
+        actual Bedrock model ID before bucketing, so aliases pointing at the
+        same Bedrock model aggregate together. Token totals follow the
+        Anthropic display convention; cost reuses ``_record_cost`` so billing
+        matches the cumulative aggregation exactly.
 
         Args:
             api_keys: API keys to scan.
@@ -1744,8 +1747,8 @@ class UsageStatsManager:
             service_tier_cache: Optional API key → service tier map for cost adjustment.
 
         Returns:
-            ``{ "YYYY-MM-DD": { model: {input_tokens, output_tokens, tokens,
-            cached_tokens, cache_write_tokens, cost, requests} } }``
+            ``{ "YYYY-MM-DD": { bedrock_model_id: {input_tokens, output_tokens,
+            tokens, cached_tokens, cache_write_tokens, cost, requests} } }``
         """
         pricing_cache = pricing_cache or {}
         model_mapping_cache = model_mapping_cache or {}
@@ -1797,8 +1800,10 @@ class UsageStatsManager:
                         )
 
                         day_bucket = buckets.setdefault(day, {})
+                        # Bucket by the actual Bedrock model ID so alias model
+                        # IDs mapping to the same Bedrock model aggregate together.
                         entry = day_bucket.setdefault(
-                            model,
+                            bedrock_model_id,
                             {
                                 "input_tokens": 0,
                                 "output_tokens": 0,

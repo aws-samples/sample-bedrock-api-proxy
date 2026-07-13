@@ -79,7 +79,11 @@ def build_daily_usage_response(
     end_dt: datetime,
     days: int,
 ) -> DailyUsageResponse:
-    """Zero-fill per-day buckets into a DailyUsageResponse with a continuous axis."""
+    """Zero-fill per-day buckets into a DailyUsageResponse with a continuous axis.
+
+    Days are zero-filled so the chart keeps a continuous time axis, but model
+    entries with zero usage (no tokens and no cost) are hidden.
+    """
     daily: list[DailyUsage] = []
     for offset in range(days):
         day_dt = start_dt + timedelta(days=offset)
@@ -99,6 +103,8 @@ def build_daily_usage_response(
             for model, stats in sorted(
                 day_models.items(), key=lambda kv: kv[1]["cost"], reverse=True
             )
+            # Hide entries with zero usage (nothing to show for either metric).
+            if int(stats["tokens"]) > 0 or float(stats["cost"]) > 0
         ]
         total_tokens = sum(m.tokens for m in models)
         total_cost = round(sum(m.cost for m in models), 6)
