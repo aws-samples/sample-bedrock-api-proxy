@@ -115,7 +115,7 @@ export interface EnvironmentConfig {
 
   // CloudFront Configuration
   enableCloudFront: boolean;            // Enable CloudFront distribution with HTTPS
-  cloudFrontOriginReadTimeout: number;  // Origin read timeout in seconds (default max 60; up to 180 with AWS quota increase)
+  cloudFrontOriginReadTimeout: number;  // Origin read timeout in seconds (up to 120 self-service; higher via AWS quota increase)
 
   // Tags
   tags: { [key: string]: string };
@@ -216,7 +216,7 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
 
     // CloudFront (HTTPS)
     enableCloudFront: false,
-    cloudFrontOriginReadTimeout: 60,  // Max 60s default; request AWS quota increase for up to 180s
+    cloudFrontOriginReadTimeout: 120,  // 120s is the current self-service max; request AWS quota increase to go higher
 
     // Logging
     logRetentionDays: 7,
@@ -321,7 +321,7 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
 
     // CloudFront (HTTPS)
     enableCloudFront: false,
-    cloudFrontOriginReadTimeout: 60,  // Max 60s default; request AWS quota increase for up to 180s
+    cloudFrontOriginReadTimeout: 120,  // 120s is the current self-service max; request AWS quota increase to go higher
 
     // Logging
     logRetentionDays: 30,
