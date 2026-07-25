@@ -1663,10 +1663,13 @@ class BedrockService:
         merged: Dict[str, str] = dict(settings.default_model_mapping)
 
         try:
-            from app.db.dynamodb import DynamoDBClient
+            from app.db.dynamodb import DynamoDBClient, ModelMappingManager
 
-            db = DynamoDBClient()
-            for row in db.model_mapping_manager.list_mappings():
+            # DynamoDBClient does not expose a `model_mapping_manager`
+            # attribute; construct the manager explicitly so custom mappings
+            # actually make it into the merged list.
+            mapping_manager = ModelMappingManager(DynamoDBClient())
+            for row in mapping_manager.list_mappings():
                 a_id = row.get("anthropic_model_id")
                 b_id = row.get("bedrock_model_id")
                 if a_id and b_id:
