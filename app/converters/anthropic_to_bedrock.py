@@ -382,6 +382,16 @@ class AnthropicToBedrockConverter:
         bedrock_messages = []
 
         for message in messages:
+            # Mid-conversation system messages (and the tool_addition/tool_removal
+            # blocks they carry) are only understood by the InvokeModel path.
+            # Converse accepts user/assistant roles only, so drop them here.
+            if message.role == "system":
+                print(
+                    "[CONVERTER] Skipping mid-conversation system message "
+                    "(unsupported by Converse API)"
+                )
+                continue
+
             bedrock_message = {
                 "role": message.role,
                 "content": self._convert_content_blocks(message.content),
