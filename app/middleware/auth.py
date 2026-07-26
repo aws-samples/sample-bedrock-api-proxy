@@ -95,9 +95,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         deep-copied in and out so handlers mutating their
         ``api_key_info`` (including nested dicts) cannot poison the
         cache. Concurrent misses for the same key coalesce into one
-        DynamoDB read (single-flight). Validation errors are treated as
-        invalid but never cached: a transient DynamoDB failure must not
-        lock a good key out for the TTL window.
+        DynamoDB read (single-flight), and waiters ``shield`` that shared
+        lookup: a client disconnecting mid-lookup must not cancel it and
+        take every other coalesced request down with it. Validation
+        errors are treated as invalid but never cached: a transient
+        DynamoDB failure must not lock a good key out for the TTL window.
         """
         cache_key = hashlib.sha256(api_key.encode()).hexdigest()
         if self._cache_ttl > 0:
@@ -106,38 +108,50 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return copy.deepcopy(cached) if cached is not None else None
 
         task = self._inflight.get(cache_key)
-        is_leader = task is None
         if task is None:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(self._lookup(api_key))
+            task = loop.create_task(self._lookup_and_cache(api_key, cache_key))
             self._inflight[cache_key] = task
 
+        # shield so cancelling *this* request (client disconnect) leaves
+        # the shared lookup running for everyone else waiting on it.
+        api_key_info = await asyncio.shield(task)
+        return copy.deepcopy(api_key_info) if api_key_info is not None else None
+
+    async def _lookup_and_cache(self, api_key: str, cache_key: str) -> dict | None:
+        """Run one DynamoDB lookup, cache the outcome, never raise.
+
+        Owns the cache write (and the in-flight slot) so the result is
+        stored even if every waiting request is cancelled first, and
+        returns ``None`` on failure instead of propagating: waiters see
+        "invalid key" (401) and nothing is cached, so the next request
+        retries.
+        """
         try:
-            api_key_info = await task
-        except Exception as e:
-            if is_leader:
+            try:
+                api_key_info = await self._lookup(api_key)
+            except Exception as e:
                 print("\n[ERROR] Exception during API key validation")
                 print(f"[ERROR] Type: {type(e).__name__}")
                 print(f"[ERROR] Message: {str(e)}")
                 import traceback
                 print(f"[ERROR] Traceback:\n{traceback.format_exc()}\n")
-            return None
-        finally:
-            if is_leader:
-                self._inflight.pop(cache_key, None)
+                return None
 
-        if is_leader and self._cache_ttl > 0:
-            if api_key_info:
-                self._cache.set(
-                    cache_key, copy.deepcopy(api_key_info), self._cache_ttl
-                )
-            else:
-                self._cache.set(
-                    cache_key,
-                    None,
-                    min(self._cache_ttl, NEGATIVE_CACHE_TTL_SECONDS),
-                )
-        return copy.deepcopy(api_key_info) if api_key_info is not None else None
+            if self._cache_ttl > 0:
+                if api_key_info:
+                    self._cache.set(
+                        cache_key, copy.deepcopy(api_key_info), self._cache_ttl
+                    )
+                else:
+                    self._cache.set(
+                        cache_key,
+                        None,
+                        min(self._cache_ttl, NEGATIVE_CACHE_TTL_SECONDS),
+                    )
+            return api_key_info
+        finally:
+            self._inflight.pop(cache_key, None)
 
     async def _lookup(self, api_key: str) -> dict | None:
         loop = asyncio.get_running_loop()

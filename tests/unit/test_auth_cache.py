@@ -262,3 +262,97 @@ def test_concurrent_misses_share_one_lookup(monkeypatch):
     assert all(r.status_code == 200 for r, _ in results)
     assert all(info["user_id"] == "u1" for _, info in results)
     assert middleware.api_key_manager.validate_api_key.call_count == 1
+
+
+def gated_validate(gate):
+    """validate_api_key that blocks in the executor until released."""
+
+    def _validate(api_key):
+        gate.wait(timeout=5)
+        return VALID_INFO
+
+    return _validate
+
+
+def test_first_request_cancellation_does_not_break_coalesced_waiters(monkeypatch):
+    """Single-flight must not turn one client disconnect into an outage.
+
+    The request that starts the shared lookup is an ordinary request: it
+    can be cancelled (client disconnect) mid-lookup. Awaiting that task
+    unshielded would propagate the cancellation to every request
+    coalesced behind it, so a single dropped connection fails all of them.
+    """
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+    gate = threading.Event()
+    middleware.api_key_manager.validate_api_key.side_effect = gated_validate(gate)
+
+    async def scenario():
+        first = asyncio.create_task(run_dispatch(middleware, "sk-valid"))
+        await asyncio.sleep(0.05)  # let `first` start the shared lookup
+        others = [
+            asyncio.create_task(run_dispatch(middleware, "sk-valid"))
+            for _ in range(2)
+        ]
+        await asyncio.sleep(0.05)  # let them coalesce onto it
+        first.cancel()  # client disconnect
+        gate.set()
+        return await asyncio.gather(first, *others, return_exceptions=True)
+
+    first_outcome, *other_outcomes = asyncio.run(scenario())
+
+    assert isinstance(first_outcome, asyncio.CancelledError)
+    for response, info in other_outcomes:
+        assert response.status_code == 200
+        assert info["user_id"] == "u1"
+    assert middleware.api_key_manager.validate_api_key.call_count == 1
+
+
+def test_waiter_cancellation_does_not_break_the_shared_lookup(monkeypatch):
+    """The mirror case: a coalesced request disconnecting must not cancel
+    the shared lookup out from under the request that started it."""
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+    gate = threading.Event()
+    middleware.api_key_manager.validate_api_key.side_effect = gated_validate(gate)
+
+    async def scenario():
+        first = asyncio.create_task(run_dispatch(middleware, "sk-valid"))
+        await asyncio.sleep(0.05)
+        waiter = asyncio.create_task(run_dispatch(middleware, "sk-valid"))
+        await asyncio.sleep(0.05)
+        waiter.cancel()
+        gate.set()
+        return await asyncio.gather(first, waiter, return_exceptions=True)
+
+    first_outcome, waiter_outcome = asyncio.run(scenario())
+
+    assert isinstance(waiter_outcome, asyncio.CancelledError)
+    response, info = first_outcome
+    assert response.status_code == 200
+    assert info["user_id"] == "u1"
+    assert middleware.api_key_manager.validate_api_key.call_count == 1
+
+
+def test_cancelled_requests_still_populate_the_cache(monkeypatch):
+    """The shared lookup owns the cache write, so a DynamoDB read already
+    paid for is not discarded when its requester disappears."""
+    middleware = make_middleware(monkeypatch, cache_ttl_seconds=60)
+    gate = threading.Event()
+    middleware.api_key_manager.validate_api_key.side_effect = gated_validate(gate)
+
+    async def scenario():
+        request = asyncio.create_task(run_dispatch(middleware, "sk-valid"))
+        await asyncio.sleep(0.05)
+        request.cancel()
+        gate.set()
+        await asyncio.gather(request, return_exceptions=True)
+        for _ in range(100):  # let the shielded lookup finish and cache
+            if len(middleware._cache):
+                break
+            await asyncio.sleep(0.01)
+        return await run_dispatch(middleware, "sk-valid")
+
+    response, info = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert info["user_id"] == "u1"
+    assert middleware.api_key_manager.validate_api_key.call_count == 1
