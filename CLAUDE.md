@@ -115,6 +115,7 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 - **Image URL Sources**: `ImageContent.source` accepts `type: "url"` (Anthropic-native shape). Proxy fetches concurrently via httpx and replaces with base64 before forwarding to Bedrock. Also accepts OpenAI-style `{"type":"image_url","image_url":{"url":...}}` blocks (both http(s) and `data:` URLs) on `/v1/messages` — coerced to native shape at validation time. Configurable timeout/size cap; no allowlist (relies on network policy).
 - **Beta Header Mapping**: Maps Anthropic beta headers → Bedrock beta headers for supported models.
 - **Tool Input Examples**: `input_examples` param on tool definitions, passed via `additionalModelRequestFields`.
+- **Mid-Conversation Tool Changes**: `role: "system"` messages carrying `tool_addition`/`tool_removal` blocks (beta `mid-conversation-tool-changes-2026-07-01`) are validated and forwarded unchanged on the InvokeModel path. Tool references: `tool_reference`, `mcp_tool_reference`, `mcp_toolset_reference`. Converse API has no equivalent, so system-role messages are dropped there.
 - **Cache TTL**: Extends `cache_control` with configurable TTL (5m or 1h). Priority: API key → request → env → default.
 - **OpenTelemetry Tracing**: OTEL GenAI semantic conventions, session-based trace grouping. Zero overhead when disabled.
 - **Admin Portal**: Separate FastAPI app for API key/usage/pricing management with Cognito auth.
