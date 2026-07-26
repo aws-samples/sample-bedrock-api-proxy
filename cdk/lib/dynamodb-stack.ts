@@ -49,6 +49,16 @@ const DEFAULT_PRICING = [
     status: 'active',
   },
   {
+    model_id: 'global.anthropic.claude-opus-5',
+    provider: 'Anthropic',
+    display_name: 'Claude Opus 5',
+    input_price: '5.00',
+    output_price: '25.00',
+    cache_read_price: '0.50',
+    cache_write_price: '6.25',
+    status: 'active',
+  },
+  {
     model_id: 'global.anthropic.claude-opus-4-7',
     provider: 'Anthropic',
     display_name: 'Claude Opus 4.7',
