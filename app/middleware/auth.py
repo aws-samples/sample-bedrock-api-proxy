@@ -2,16 +2,51 @@
 Authentication middleware for API key validation.
 
 Validates API keys from request headers and attaches user information to requests.
+
+Validation results are cached in-process with a TTL so the hot path does
+not pay a DynamoDB round trip per request, and cache misses run in a
+dedicated worker thread pool so the synchronous boto3 call never blocks
+the event loop (and never queues behind long-running default-executor
+work like web search or docker pulls).
 """
+import asyncio
+import copy
+import hashlib
 import hmac
-from typing import Callable
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import HTTPException, Request, status
 from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
+from app.core.ttl_cache import TTLCache
 from app.db.dynamodb import APIKeyManager, DynamoDBClient
+
+# Invalid keys are cached only briefly: long enough to blunt brute-force
+# spam against DynamoDB, short enough that a freshly created key works
+# almost immediately.
+NEGATIVE_CACHE_TTL_SECONDS = 5.0
+
+# Small dedicated pool for auth lookups. The event loop's default
+# executor is shared with multi-second work elsewhere in this codebase
+# (Tavily web search/fetch, docker pulls); auth is on the critical path
+# of every request and must not queue behind those.
+_auth_executor: ThreadPoolExecutor | None = None
+_auth_executor_lock = threading.Lock()
+
+
+def _get_auth_executor() -> ThreadPoolExecutor:
+    global _auth_executor
+    if _auth_executor is None:
+        with _auth_executor_lock:
+            if _auth_executor is None:
+                _auth_executor = ThreadPoolExecutor(
+                    max_workers=4, thread_name_prefix="auth-validate"
+                )
+    return _auth_executor
 
 
 # API Key header scheme
@@ -24,16 +59,91 @@ api_key_header_scheme = APIKeyHeader(
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware for API key authentication."""
 
-    def __init__(self, app, dynamodb_client: DynamoDBClient):
+    def __init__(
+        self,
+        app,
+        dynamodb_client: DynamoDBClient,
+        cache_ttl_seconds: float | None = None,
+    ):
         """
         Initialize auth middleware.
 
         Args:
             app: FastAPI application
             dynamodb_client: DynamoDB client instance
+            cache_ttl_seconds: TTL for cached validation results.
+                Defaults to ``settings.api_key_cache_ttl_seconds``;
+                0 disables caching. Key changes made in another process
+                (e.g. the admin portal) take up to this long to apply.
         """
         super().__init__(app)
         self.api_key_manager = APIKeyManager(dynamodb_client)
+        if cache_ttl_seconds is None:
+            cache_ttl_seconds = settings.api_key_cache_ttl_seconds
+        self._cache_ttl = cache_ttl_seconds
+        self._cache = TTLCache()
+        # In-flight lookups by cache key (single-flight): only touched
+        # from the event loop, so no lock is needed.
+        self._inflight: dict[str, asyncio.Task] = {}
+
+    async def _validate_api_key(self, api_key: str) -> dict | None:
+        """Validate a key via cache, falling back to DynamoDB off-loop.
+
+        The cache is keyed by a SHA-256 digest of the key, so plaintext
+        credentials are not held as dict keys and attacker-supplied
+        oversized "keys" cannot inflate per-entry memory. Values are
+        deep-copied in and out so handlers mutating their
+        ``api_key_info`` (including nested dicts) cannot poison the
+        cache. Concurrent misses for the same key coalesce into one
+        DynamoDB read (single-flight). Validation errors are treated as
+        invalid but never cached: a transient DynamoDB failure must not
+        lock a good key out for the TTL window.
+        """
+        cache_key = hashlib.sha256(api_key.encode()).hexdigest()
+        if self._cache_ttl > 0:
+            hit, cached = self._cache.get(cache_key)
+            if hit:
+                return copy.deepcopy(cached) if cached is not None else None
+
+        task = self._inflight.get(cache_key)
+        is_leader = task is None
+        if task is None:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self._lookup(api_key))
+            self._inflight[cache_key] = task
+
+        try:
+            api_key_info = await task
+        except Exception as e:
+            if is_leader:
+                print("\n[ERROR] Exception during API key validation")
+                print(f"[ERROR] Type: {type(e).__name__}")
+                print(f"[ERROR] Message: {str(e)}")
+                import traceback
+                print(f"[ERROR] Traceback:\n{traceback.format_exc()}\n")
+            return None
+        finally:
+            if is_leader:
+                self._inflight.pop(cache_key, None)
+
+        if is_leader and self._cache_ttl > 0:
+            if api_key_info:
+                self._cache.set(
+                    cache_key, copy.deepcopy(api_key_info), self._cache_ttl
+                )
+            else:
+                self._cache.set(
+                    cache_key,
+                    None,
+                    min(self._cache_ttl, NEGATIVE_CACHE_TTL_SECONDS),
+                )
+        return copy.deepcopy(api_key_info) if api_key_info is not None else None
+
+    async def _lookup(self, api_key: str) -> dict | None:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _get_auth_executor(), self.api_key_manager.validate_api_key, api_key
+        )
 
     async def dispatch(self, request: Request, call_next: Callable):
         """
@@ -91,16 +201,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             }
             return await call_next(request)
 
-        # Validate API key in DynamoDB
-        try:
-            api_key_info = self.api_key_manager.validate_api_key(api_key)
-        except Exception as e:
-            print(f"\n[ERROR] Exception during API key validation")
-            print(f"[ERROR] Type: {type(e).__name__}")
-            print(f"[ERROR] Message: {str(e)}")
-            import traceback
-            print(f"[ERROR] Traceback:\n{traceback.format_exc()}\n")
-            api_key_info = None
+        # Validate API key (in-process cache, DynamoDB on miss)
+        api_key_info = await self._validate_api_key(api_key)
 
         if not api_key_info:
             # Deliberately do not log the rejected key (or any derivative of

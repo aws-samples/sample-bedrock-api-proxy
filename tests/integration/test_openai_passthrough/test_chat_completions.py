@@ -62,8 +62,8 @@ def test_non_streaming_chat_completions_forwards_and_logs_usage(
     assert sent_body["input"] == [{"role": "user", "content": "hi"}]
     assert "store" not in sent_body
     # Usage was recorded
-    assert mock_usage_tracker.record_usage.called
-    kwargs = mock_usage_tracker.record_usage.call_args.kwargs
+    assert mock_usage_tracker.record_usage_nowait.called
+    kwargs = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kwargs["input_tokens"] == 10
     assert kwargs["output_tokens"] == 5
     assert kwargs["cached_tokens"] == 3
@@ -458,7 +458,7 @@ def test_upstream_4xx_returned_verbatim(client, respx_mock, mock_usage_tracker):
     )
     assert r.status_code == 404
     assert r.json() == err_body
-    assert not mock_usage_tracker.record_usage.called  # Don't log usage on errors
+    assert not mock_usage_tracker.record_usage_nowait.called  # Don't log usage on errors
 
 
 def test_missing_auth_returns_401(client):
@@ -506,8 +506,8 @@ def test_streaming_chat_completions_forwards_sse_and_records_usage(
     assert b'"delta":{"content":"hi"}' in out
     assert b"[DONE]" in out
     # Usage recorded from the chunk that had it
-    assert mock_usage_tracker.record_usage.called
-    kw = mock_usage_tracker.record_usage.call_args.kwargs
+    assert mock_usage_tracker.record_usage_nowait.called
+    kw = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kw["input_tokens"] == 7
     assert kw["output_tokens"] == 2
     assert kw["cached_tokens"] == 1
@@ -613,7 +613,7 @@ def test_streaming_chat_completions_without_include_usage_does_not_log(
     ) as r:
         list(r.iter_bytes())  # drain
 
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_streaming_chat_completions_does_not_inject_event_lines(
@@ -697,4 +697,4 @@ def test_streaming_upstream_timeout_returns_json_504(
     body = r.json()
     assert body["error"]["type"] == "upstream_error"
     assert "timeout" in body["error"]["message"].lower()
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called

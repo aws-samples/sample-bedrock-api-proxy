@@ -53,7 +53,7 @@ def test_non_streaming_responses_forwards_and_logs_usage(
     assert r.status_code == 200
     assert r.json() == upstream
     assert route.called
-    kw = mock_usage_tracker.record_usage.call_args.kwargs
+    kw = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kw["input_tokens"] == 11
     assert kw["output_tokens"] == 4
     assert kw["api_surface"] == "responses"
@@ -104,7 +104,7 @@ def test_streaming_responses_records_usage_from_response_completed(
 
     assert b"response.completed" in out
     assert b"hi" in out
-    kw = mock_usage_tracker.record_usage.call_args.kwargs
+    kw = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kw["input_tokens"] == 12
     assert kw["output_tokens"] == 3
     assert kw["api_surface"] == "responses"
@@ -172,7 +172,7 @@ def test_responses_upstream_error_returned_verbatim(
     )
     assert r.status_code == 400
     assert r.json()["error"]["message"] == "bad input"
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_streaming_responses_upstream_4xx_returns_json_not_sse(
@@ -206,7 +206,7 @@ def test_streaming_responses_upstream_4xx_returns_json_not_sse(
         "application/json"
     ), f"expected JSON content-type, got {r.headers['content-type']}"
     assert r.json() == err
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_non_streaming_responses_web_search_uses_local_adapter_not_upstream(
@@ -252,7 +252,7 @@ def test_non_streaming_responses_web_search_uses_local_adapter_not_upstream(
     assert not route.called
     assert mock_web_search_service.handle_request.called
     assert mock_response_context_store.save.called
-    kw = mock_usage_tracker.record_usage.call_args.kwargs
+    kw = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kw["api_surface"] == "responses"
     assert kw["input_tokens"] == 3
     assert kw["output_tokens"] == 2
@@ -350,7 +350,7 @@ def test_streaming_responses_web_search_emits_local_responses_sse(
     assert "streamed answer" in out
     assert "event: response.completed" in out
     assert not route.called
-    kw = mock_usage_tracker.record_usage.call_args.kwargs
+    kw = mock_usage_tracker.record_usage_nowait.call_args.kwargs
     assert kw["api_surface"] == "responses"
     assert kw["input_tokens"] == 4
     assert kw["output_tokens"] == 3
@@ -384,7 +384,7 @@ def test_streaming_responses_web_search_service_failure_returns_json_error(
     assert data["error"]["type"] == "api_error"
     assert "local failed" in data["error"]["message"]
     assert not route.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_non_streaming_responses_web_search_service_failure_returns_json_error(
@@ -414,7 +414,7 @@ def test_non_streaming_responses_web_search_service_failure_returns_json_error(
     assert data["error"]["type"] == "api_error"
     assert "local failed" in data["error"]["message"]
     assert not route.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_non_streaming_responses_web_search_dependency_failure_returns_json_error(
@@ -444,7 +444,7 @@ def test_non_streaming_responses_web_search_dependency_failure_returns_json_erro
     assert data["error"]["type"] == "api_error"
     assert "setup failed" in data["error"]["message"]
     assert not route.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_streaming_responses_web_search_dependency_failure_returns_json_error(
@@ -475,7 +475,7 @@ def test_streaming_responses_web_search_dependency_failure_returns_json_error(
     assert data["error"]["type"] == "api_error"
     assert "setup failed" in data["error"]["message"]
     assert not route.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 def test_responses_web_search_rejects_external_web_access_false(
@@ -501,7 +501,7 @@ def test_responses_web_search_rejects_external_web_access_false(
     assert r.json()["error"]["type"] == "invalid_request_error"
     assert "external_web_access" in r.json()["error"]["message"]
     assert not route.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called
 
 
 @pytest.mark.parametrize("web_search_enabled", [False], indirect=True)
@@ -532,4 +532,4 @@ def test_non_streaming_responses_web_search_disabled_skips_local_dependencies(
     assert "disabled" in data["error"]["message"].lower()
     assert not route.called
     assert not mock_web_search_service.handle_request.called
-    assert not mock_usage_tracker.record_usage.called
+    assert not mock_usage_tracker.record_usage_nowait.called

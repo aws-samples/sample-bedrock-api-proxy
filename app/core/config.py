@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     api_key_header: str = Field(default="x-api-key", alias="API_KEY_HEADER")
     require_api_key: bool = Field(default=True, alias="REQUIRE_API_KEY")
     master_api_key: Optional[str] = Field(default=None, alias="MASTER_API_KEY")
+    api_key_cache_ttl_seconds: int = Field(
+        default=60, alias="API_KEY_CACHE_TTL_SECONDS",
+        description=(
+            "TTL in seconds for the in-process API key validation cache "
+            "(0 to disable). Avoids a DynamoDB read per request; key "
+            "changes (create/disable) made in another process take up to "
+            "this long to apply on running workers."
+        )
+    )
 
     # Rate Limiting Settings
     rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
@@ -288,6 +297,15 @@ class Settings(BaseSettings):
         alias="INFERENCE_PROFILE_CACHE_TTL_SECONDS",
         description="TTL (seconds) for the in-memory cache mapping application "
                     "inference profile ARNs to their underlying foundation model ID.",
+    )
+
+    # Model Mapping Cache
+    model_mapping_cache_ttl_seconds: int = Field(
+        default=300,
+        alias="MODEL_MAPPING_CACHE_TTL_SECONDS",
+        description="TTL (seconds) for the in-process model mapping cache "
+                    "(0 to disable). Mapping changes made in another process "
+                    "(e.g. the admin portal) take up to this long to apply.",
     )
 
     # Beta features that require InvokeModel API instead of Converse API

@@ -3,11 +3,10 @@ Metrics collection and export.
 
 Provides Prometheus-compatible metrics for monitoring.
 """
-from prometheus_client import Counter, Histogram, Gauge, Info
-from typing import Optional
+
+from prometheus_client import Counter, Gauge, Histogram, Info
 
 from app.core.config import settings
-
 
 # Request metrics
 request_counter = Counter(
@@ -67,6 +66,12 @@ rate_limit_exceeded_counter = Counter(
     "rate_limit_exceeded_total",
     "Total number of rate limit exceeded events",
     ["api_key"],
+)
+
+# Usage tracking metrics
+usage_writes_dropped_counter = Counter(
+    "usage_writes_dropped_total",
+    "Usage/billing rows dropped because the background write backlog was full",
 )
 
 # Authentication metrics
