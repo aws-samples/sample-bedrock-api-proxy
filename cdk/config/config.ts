@@ -202,10 +202,10 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // OpenAI-Compatible API (Bedrock Mantle)
     enableOpenaiCompat: false,
     enableOpenaiPassthrough: true,
-    // Mantle endpoint for the /openai/v1/* passthrough. The path is
-    // `/openai/v1`, NOT `/v1`. Override with MANTLE_ENDPOINT_URL to point a dev
-    // deploy at a different region.
-    openaiBaseUrl: 'https://bedrock-mantle.us-west-2.api.aws/openai/v1',
+    // Upstream Mantle base URL — path is `/v1` (see the prod block for why
+    // `/openai/v1` is wrong here). Override with MANTLE_ENDPOINT_URL to point a
+    // dev deploy at a different region.
+    openaiBaseUrl: 'https://bedrock-mantle.us-west-2.api.aws/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -316,12 +316,15 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // OpenAI-Compatible API (Bedrock Mantle)
     enableOpenaiCompat: false,
     enableOpenaiPassthrough: true,
-    // Mantle endpoint for the /openai/v1/* passthrough. Note the path is
-    // `/openai/v1`, NOT `/v1` — the OpenAI-compatible surface is mounted under
-    // /openai. Leaving this unset while enableOpenaiPassthrough is true makes
-    // every passthrough request fail on a scheme-less upstream URL, which is
-    // why deploy.sh now rejects that combination instead of deploying it.
-    openaiBaseUrl: 'https://bedrock-mantle.us-east-2.api.aws/openai/v1',
+    // Upstream Mantle base URL. The path is `/v1` — this is the upstream we
+    // call, not the `/openai/v1/*` path the proxy exposes to clients, and the
+    // two are deliberately different. Using `/openai/v1` here makes Mantle
+    // reject every request with
+    //   "The model '<id>' does not support the '/openai/v1/responses' API"
+    // which reads like a model problem but is really a wrong base path.
+    // Leaving it unset entirely produces a scheme-less URL and a 502, which is
+    // why validateConfig() rejects that combination.
+    openaiBaseUrl: 'https://bedrock-mantle.us-east-2.api.aws/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -548,6 +551,41 @@ export function validateConfig(config: EnvironmentConfig, environmentName: strin
       `cloudFrontCertificateArn must be an ACM cert in us-east-1 (CloudFront ` +
       `accepts certs from no other region). Got: ${config.cloudFrontCertificateArn}`
     );
+  }
+
+  // The Mantle base URL must end in /v1, not /openai/v1. It is easy to conflate
+  // with the `/openai/v1/*` routes the proxy exposes to clients, but that is the
+  // inbound path — the upstream mounts its OpenAI surface at /v1. Getting this
+  // wrong yields "The model '<id>' does not support the '/openai/v1/responses'
+  // API" for every model, which looks like a model-availability problem and
+  // sends you hunting in the wrong place.
+  if (config.openaiBaseUrl) {
+    let url: URL | undefined;
+    try {
+      url = new URL(config.openaiBaseUrl);
+    } catch {
+      errors.push(`openaiBaseUrl is not a valid URL: ${config.openaiBaseUrl}`);
+    }
+    if (url) {
+      if (url.protocol !== 'https:') {
+        errors.push(
+          `openaiBaseUrl must use https. Got: ${config.openaiBaseUrl}`
+        );
+      }
+      const trimmedPath = url.pathname.replace(/\/+$/, '');
+      if (trimmedPath.endsWith('/openai/v1')) {
+        errors.push(
+          `openaiBaseUrl must not end in '/openai/v1' — that is the path the ` +
+          `proxy exposes to clients, not the upstream path. Use '/v1' instead: ` +
+          `${url.origin}/v1 (got ${config.openaiBaseUrl})`
+        );
+      } else if (!trimmedPath.endsWith('/v1')) {
+        errors.push(
+          `openaiBaseUrl should end in '/v1' (the upstream OpenAI-compatible ` +
+          `base path). Got: ${config.openaiBaseUrl}`
+        );
+      }
+    }
   }
 
   // Web search needs a provider credential to call out to.
