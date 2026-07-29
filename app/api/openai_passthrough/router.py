@@ -19,6 +19,7 @@ from app.api.openai_passthrough.chat_responses_adapter import (
     downgrade_unsupported_tools,
     pop_unsupported_parameter,
     response_to_chat_completion,
+    sanitize_input_items,
     stream_responses_as_chat_completions,
     strip_learned_unsupported_params,
 )
@@ -389,6 +390,15 @@ async def responses_create(
         logger.info(
             "[OPENAI-PASSTHROUGH] rewrote unsupported tools as function tools: %s",
             ", ".join(downgraded_tools),
+        )
+    # The replayed conversation history has the same problem: one item type
+    # mantle cannot deserialize rejects the whole request, and because the client
+    # keeps replaying that history the conversation stays broken from then on.
+    sanitized_input = sanitize_input_items(body)
+    if sanitized_input:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] adjusted unsupported input items: %s",
+            ", ".join(sanitized_input),
         )
     extra = _passthrough_extra_headers(request)
     base_url, api_key = _resolve_upstream_target(api_key_info)

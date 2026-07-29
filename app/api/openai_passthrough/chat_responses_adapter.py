@@ -143,6 +143,31 @@ _CUSTOM_TOOL_INPUT_SCHEMA = {
 }
 
 
+# Conversation-history item types mantle can deserialize. Anything outside this
+# set fails the whole request with
+#   Invalid 'input': value did not match any expected variant
+# before the model is even consulted. Verified by probing each type upstream.
+_MANTLE_SUPPORTED_INPUT_TYPES = frozenset({
+    "message",
+    "reasoning",
+    "function_call",
+    "function_call_output",
+    "mcp_call",
+    "mcp_list_tools",
+    "item_reference",
+})
+
+# These deserialize but are then rejected semantically with
+# "Unknown input type: <t>" (HTTP 200 carrying an error body). They are the
+# echo of a `custom` tool, which downgrade_unsupported_tools() has already
+# rewritten as a function — so the history has to be rewritten to match, or the
+# next turn fails on the tool call the model itself produced.
+_CUSTOM_CALL_TO_FUNCTION_CALL = {
+    "custom_tool_call": "function_call",
+    "custom_tool_call_output": "function_call_output",
+}
+
+
 def _function_tool(name: str, description: str, parameters: Any) -> dict[str, Any]:
     """Build a Responses-API function tool, omitting an empty description."""
     tool: dict[str, Any] = {
@@ -252,6 +277,88 @@ def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
     if rewritten:
         body["tools"] = result
     return rewritten
+
+
+def sanitize_input_items(body: dict[str, Any]) -> list[str]:
+    """Drop or rewrite conversation-history items mantle cannot accept.
+
+    ``body["input"]`` carries the prior turns of the conversation. Mantle
+    deserializes only a subset of the OpenAI item types; anything else fails the
+    entire request before the model is consulted::
+
+        Failed to deserialize the JSON body into the target type:
+        Invalid 'input': value did not match any expected variant
+
+    Since one bad item rejects the whole array, a single unsupported entry makes
+    every subsequent turn fail — the conversation becomes permanently stuck,
+    because the offending item stays in the history the client replays.
+
+    Two classes are handled:
+
+    * ``custom_tool_call`` / ``custom_tool_call_output`` are renamed to their
+      ``function_call`` equivalents. These are the echo of a ``custom`` tool that
+      downgrade_unsupported_tools() already rewrote as a function, so the history
+      must be rewritten the same way to stay consistent with the declared tools.
+      The free-form ``input`` field becomes JSON ``arguments`` to match.
+    * Items whose type mantle does not implement at all (``web_search_call``,
+      ``local_shell_call``, ``computer_call``, ``file_search_call``,
+      ``image_generation_call``, ``code_interpreter_call``, ...) are dropped.
+      They describe tool activity that did not happen upstream, so removing them
+      loses provider-side annotations but keeps the conversation usable.
+
+    Items with no ``type`` are left alone: mantle accepts a bare
+    ``{"role", "content"}`` message, which is what clients commonly send.
+
+    Mutates ``body["input"]`` in place. Returns human-readable notes describing
+    what changed, for logging.
+    """
+    items = body.get("input")
+    if not isinstance(items, list):
+        return []
+
+    notes: list[str] = []
+    result: list[Any] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+
+        item_type = item.get("type")
+        if item_type is None:
+            # A plain {"role": ..., "content": ...} message.
+            result.append(item)
+            continue
+
+        replacement_type = _CUSTOM_CALL_TO_FUNCTION_CALL.get(item_type)
+        if replacement_type is not None:
+            converted = {
+                key: value for key, value in item.items() if key != "input"
+            }
+            converted["type"] = replacement_type
+            if replacement_type == "function_call":
+                # A custom tool call carries free-form text in `input`; the
+                # function equivalent expects a JSON `arguments` string whose
+                # shape matches _CUSTOM_TOOL_INPUT_SCHEMA.
+                if "arguments" not in converted:
+                    raw = item.get("input")
+                    converted["arguments"] = json.dumps(
+                        {"input": raw if isinstance(raw, str) else ""}
+                    )
+                converted.setdefault("name", item.get("name", ""))
+            result.append(converted)
+            notes.append(f"{item_type}->{replacement_type}")
+            continue
+
+        if item_type not in _MANTLE_SUPPORTED_INPUT_TYPES:
+            notes.append(f"dropped {item_type}")
+            continue
+
+        result.append(item)
+
+    if notes:
+        body["input"] = result
+    return notes
 
 
 def chat_request_to_response_request(body: dict[str, Any]) -> dict[str, Any]:
