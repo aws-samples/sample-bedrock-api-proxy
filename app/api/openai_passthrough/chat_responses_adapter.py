@@ -304,6 +304,140 @@ def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
     return rewritten
 
 
+# tool_choice values mantle serves. It rejects everything else with
+#   does not support tool_choice '"required"' ... Supported options: ["auto"]
+# so a client asking the model to be forced into (or out of) a tool call fails
+# the whole request.
+_MANTLE_SUPPORTED_TOOL_CHOICES = frozenset({"auto"})
+
+# Content-part types accepted inside a user/system/developer message.
+_MANTLE_SUPPORTED_CONTENT_PARTS = frozenset({"input_text"})
+
+
+def normalize_message_content(body: dict[str, Any]) -> list[str]:
+    """Reshape message content into the narrow form mantle accepts.
+
+    Two constraints, both found by probing the upstream:
+
+    * Assistant messages must carry a plain string. A content-part array — which
+      is what the Responses API specifies and what clients replay from a previous
+      turn — triggers ``SubmitRequestFailure ... 219 validation errors``.
+    * User/system/developer messages accept only ``input_text`` parts. ``text``
+      (the Chat Completions spelling), ``refusal``, ``input_audio`` and
+      ``input_image`` are rejected at deserialization; ``input_file`` fails
+      server-side.
+
+    Non-text parts cannot be represented, so they are replaced with a short
+    textual placeholder rather than dropped silently: the model still sees that
+    an attachment was present, and the turn structure stays intact.
+
+    Mutates ``body["input"]`` in place. Returns notes describing what changed.
+    """
+    items = body.get("input")
+    if not isinstance(items, list):
+        return []
+
+    notes: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in (None, "message"):
+            continue
+        content = item.get("content")
+        role = item.get("role")
+
+        if role == "assistant":
+            if isinstance(content, list):
+                text = _content_to_text(content)
+                item["content"] = text
+                notes.append("assistant content[]->str")
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        converted: list[Any] = []
+        changed = False
+        for part in content:
+            if not isinstance(part, dict):
+                converted.append(part)
+                continue
+            part_type = part.get("type")
+            if part_type in _MANTLE_SUPPORTED_CONTENT_PARTS:
+                converted.append(part)
+                continue
+            text = part.get("text")
+            if part_type == "text" and isinstance(text, str):
+                # Same payload, different spelling.
+                converted.append({"type": "input_text", "text": text})
+                changed = True
+                notes.append("text->input_text")
+                continue
+            placeholder = _content_part_placeholder(part_type, part)
+            converted.append({"type": "input_text", "text": placeholder})
+            changed = True
+            notes.append(f"{part_type}->input_text placeholder")
+        if changed:
+            item["content"] = converted
+
+    return notes
+
+
+def _content_part_placeholder(part_type: Any, part: dict[str, Any]) -> str:
+    """Describe an unrepresentable content part as text."""
+    if part_type == "refusal":
+        refusal = part.get("refusal")
+        return str(refusal) if isinstance(refusal, str) and refusal else "[refusal]"
+    if part_type == "input_image":
+        return "[image omitted: not supported by this upstream model]"
+    if part_type == "input_file":
+        name = part.get("filename")
+        label = f" {name}" if isinstance(name, str) and name else ""
+        return f"[file{label} omitted: not supported by this upstream model]"
+    if part_type == "input_audio":
+        return "[audio omitted: not supported by this upstream model]"
+    text = part.get("text")
+    if isinstance(text, str) and text:
+        return text
+    return f"[{part_type or 'content'} omitted: not supported by this upstream model]"
+
+
+def clamp_tool_choice(body: dict[str, Any]) -> str | None:
+    """Reduce ``tool_choice`` to ``auto``, the only value mantle serves.
+
+    Rejecting the request is worse than relaxing the constraint: ``required`` and
+    a named-function choice are both requests to *use* tools, and ``auto`` still
+    permits that — the model simply is not forced. ``none`` is the one case where
+    intent is inverted, so the tools are removed instead of silently allowing
+    calls the client asked to suppress.
+
+    Returns a note describing the change, or None if nothing changed.
+    """
+    if "tool_choice" not in body:
+        return None
+    choice = body["tool_choice"]
+
+    if isinstance(choice, str):
+        if choice in _MANTLE_SUPPORTED_TOOL_CHOICES:
+            return None
+        if choice == "none":
+            # Honour "do not call tools" by withholding the tools entirely.
+            body["tool_choice"] = "auto"
+            if body.get("tools"):
+                body["tools"] = []
+                return "tool_choice none->auto (tools withheld)"
+            return "tool_choice none->auto"
+        body["tool_choice"] = "auto"
+        return f"tool_choice {choice}->auto"
+
+    if isinstance(choice, dict):
+        described = choice.get("name") or choice.get("type") or "object"
+        body["tool_choice"] = "auto"
+        return f"tool_choice {described}->auto"
+
+    return None
+
+
 def clamp_reasoning_effort(body: dict[str, Any]) -> str | None:
     """Clamp ``reasoning.effort`` to a tier bedrock-mantle actually serves.
 

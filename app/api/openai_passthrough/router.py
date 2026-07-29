@@ -17,7 +17,9 @@ from app.api.openai_passthrough.chat_responses_adapter import (
     MAX_UNSUPPORTED_PARAM_RETRIES,
     chat_request_to_response_request,
     clamp_reasoning_effort,
+    clamp_tool_choice,
     downgrade_unsupported_tools,
+    normalize_message_content,
     pop_unsupported_parameter,
     response_to_chat_completion,
     sanitize_input_items,
@@ -408,6 +410,18 @@ async def responses_create(
         logger.info(
             "[OPENAI-PASSTHROUGH] clamped reasoning effort: %s", clamped_effort
         )
+    # Assistant turns must be plain strings and only input_text parts are
+    # accepted; clients replay both in the richer spec shape.
+    normalized_content = normalize_message_content(body)
+    if normalized_content:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] normalized message content: %s",
+            ", ".join(sorted(set(normalized_content))),
+        )
+    # Mantle serves only tool_choice=auto.
+    clamped_choice = clamp_tool_choice(body)
+    if clamped_choice:
+        logger.info("[OPENAI-PASSTHROUGH] %s", clamped_choice)
     extra = _passthrough_extra_headers(request)
     base_url, api_key = _resolve_upstream_target(api_key_info)
     _info_log_upstream_request(
