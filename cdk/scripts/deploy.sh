@@ -114,6 +114,48 @@ EOF
     exit 1
 }
 
+# Load deploy-time secrets from cdk/.env.local (gitignored) if present.
+#
+# Only secrets belong there; shared configuration lives in config/config.ts so
+# it cannot differ silently between machines.
+#
+# Values already present in the environment take precedence, so a one-off
+# `BEDROCK_API_KEY=... ./deploy.sh` still overrides the file. That is why this
+# assigns each key individually instead of `set -a; . file` — sourcing would
+# clobber an explicit override with the file's value.
+# CDK_ENV_LOCAL_FILE overrides the path (tests point it at /dev/null so they do
+# not depend on whether the developer happens to have a .env.local).
+ENV_LOCAL="${CDK_ENV_LOCAL_FILE:-$(dirname "$0")/../.env.local}"
+if [ -f "$ENV_LOCAL" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;          # blank or comment
+            *=*) ;;
+            *) continue ;;                # not an assignment
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        # Trim with parameter expansion only — this must work before PATH is
+        # usable, so no sed/tr/awk here.
+        while case "$key" in [[:space:]]*) true ;; *) false ;; esac; do key="${key# }"; key="${key#	}"; done
+        while case "$key" in *[[:space:]]) true ;; *) false ;; esac; do key="${key% }"; key="${key%	}"; done
+        while case "$value" in [[:space:]]*) true ;; *) false ;; esac; do value="${value# }"; value="${value#	}"; done
+        while case "$value" in *[[:space:]]) true ;; *) false ;; esac; do value="${value% }"; value="${value%	}"; done
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+        [ -n "$key" ] || continue
+        [ -n "$value" ] || continue       # skip placeholders like `KEY=`
+        # Only set it if not already provided in the environment, so an explicit
+        # `KEY=... ./deploy.sh` still wins.
+        if [ -z "$(eval "printf '%s' \"\${$key:-}\"")" ]; then
+            export "$key=$value"
+        fi
+    done < "$ENV_LOCAL"
+    echo -e "${GREEN}✓ Loaded deploy secrets from ${ENV_LOCAL##*/}${NC}"
+fi
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
