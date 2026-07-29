@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.api.openai_passthrough.chat_responses_adapter import (
     MAX_UNSUPPORTED_PARAM_RETRIES,
     chat_request_to_response_request,
-    downgrade_custom_tools,
+    downgrade_unsupported_tools,
     pop_unsupported_parameter,
     response_to_chat_completion,
     stream_responses_as_chat_completions,
@@ -381,12 +381,13 @@ async def responses_create(
     body = await request.json()
     mapping, _, context_store = _managers()
     body["model"] = resolve_model_id(body.get("model", ""), mapping)
-    # bedrock-mantle rejects the Responses-API `custom` tool variant outright,
-    # failing the whole request. The Codex CLI sends one for apply_patch.
-    downgraded_tools = downgrade_custom_tools(body)
+    # bedrock-mantle accepts only `function` and `mcp` tools; any other variant
+    # (custom, namespace, web_search, ...) rejects the whole request, taking
+    # every other tool with it. The Codex CLI sends both custom and namespace.
+    downgraded_tools = downgrade_unsupported_tools(body)
     if downgraded_tools:
         logger.info(
-            "[OPENAI-PASSTHROUGH] rewrote custom tools as function tools: %s",
+            "[OPENAI-PASSTHROUGH] rewrote unsupported tools as function tools: %s",
             ", ".join(downgraded_tools),
         )
     extra = _passthrough_extra_headers(request)

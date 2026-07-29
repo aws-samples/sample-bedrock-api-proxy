@@ -14,6 +14,16 @@ COPY main.py ./
 
 # Install dependencies using uv
 # uv sync will create a .venv directory with all dependencies
+#
+# uv's default 30s HTTP timeout is too tight for the large wheels here
+# (botocore ~14MiB, grpcio ~6MiB, torch, ...), especially when building under
+# QEMU emulation for a foreign architecture, where extraction competes with the
+# download. It surfaces as a build failure naming whichever wheel lost the race:
+#   Failed to download distribution due to network timeout.
+#   Try increasing UV_HTTP_TIMEOUT (current value: 30s).
+# Retries are also bounded so a genuinely dead mirror still fails fast.
+ENV UV_HTTP_TIMEOUT=180 \
+    UV_CONCURRENT_DOWNLOADS=4
 RUN uv sync --frozen --no-dev
 
 # Stage 2: Runtime

@@ -119,72 +119,138 @@ def reset_unsupported_param_cache_for_testing() -> None:
     _unsupported_param_cache.clear()
 
 
-def downgrade_custom_tools(body: dict[str, Any]) -> list[str]:
-    """Rewrite Responses-API ``custom`` tools as ``function`` tools in place.
+# bedrock-mantle implements only two Responses-API tool variants. Everything
+# else in the OpenAI spec (custom, namespace, web_search, code_interpreter,
+# file_search, image_generation, computer_use_preview, local_shell, ...) is
+# rejected at deserialization time, failing the entire request. Verified by
+# probing the upstream directly.
+_MANTLE_SUPPORTED_TOOL_TYPES = frozenset({"function", "mcp"})
 
-    OpenAI's Responses API accepts ``{"type": "custom"}`` tools, which take
-    free-form text instead of JSON arguments. The OpenAI Codex CLI uses one for
-    ``apply_patch``. bedrock-mantle does not implement the variant and rejects
-    the whole request::
+# A `custom` tool takes free-form text rather than JSON arguments. The closest
+# function equivalent is one string parameter, and OpenAI's native custom tool
+# hands the client that text as `input`, so reusing the name keeps the tool call
+# readable by an unmodified client.
+_CUSTOM_TOOL_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "input": {
+            "type": "string",
+            "description": "Raw text payload for this tool, passed through verbatim.",
+        }
+    },
+    "required": ["input"],
+    "additionalProperties": False,
+}
 
-        Failed to deserialize the JSON body into the target type: ?[0]:
-        Invalid 'tools': unknown variant `custom`, expected `function` or `mcp`
 
-    Note the error names no parameter (``param`` is null) and is a
-    deserialization failure, so the learned-unsupported-param path in
-    pop_unsupported_parameter() cannot handle it — the offending value is a
-    variant tag inside an array, not a top-level field.
+def _function_tool(name: str, description: str, parameters: Any) -> dict[str, Any]:
+    """Build a Responses-API function tool, omitting an empty description."""
+    tool: dict[str, Any] = {
+        "type": "function",
+        "name": name,
+        "parameters": _normalize_null_required_fields(parameters),
+    }
+    if isinstance(description, str) and description:
+        tool["description"] = description
+    return tool
 
-    Dropping the tool is not an option: for Codex, ``apply_patch`` is how the
-    model edits files. Instead express it as the nearest supported equivalent —
-    a function with a single required string parameter named ``input``. That is
-    the same argument name OpenAI's native ``custom`` tool delivers, so the
-    client reads the tool call unchanged. Verified against mantle: the model
-    emits a well-formed apply_patch call with the patch text in
-    ``arguments.input``.
 
-    Returns the names of the rewritten tools, for logging.
+def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
+    """Rewrite tool variants bedrock-mantle rejects into ``function`` tools.
+
+    Mantle accepts only ``function`` and ``mcp``; any other variant fails the
+    whole request at deserialization::
+
+        Failed to deserialize the JSON body into the target type: ?[12]:
+        Invalid 'tools': unknown variant `namespace`, expected `function` or `mcp`
+
+    The error names no parameter (``param`` is null), so the learned-unsupported
+    -param retry in pop_unsupported_parameter() cannot help: the offending value
+    is a variant tag inside an array, not a top-level field. And because one bad
+    entry rejects the entire array, a single unsupported tool disables every tool
+    in the request.
+
+    Dropping the tools is not viable — for the Codex CLI ``apply_patch`` is how
+    the model edits files. Each variant is instead mapped to the nearest
+    supported shape:
+
+    * ``custom`` -> a function taking one string parameter ``input`` (the
+      variant carries free-form text, and ``input`` is the argument name
+      OpenAI's own custom tool produces).
+    * ``namespace`` -> its nested tools flattened to top level as
+      ``<namespace>.<tool>``. Dotted names are accepted upstream and preserve
+      the grouping the client sent, so the returned call still identifies the
+      intended tool.
+    * anything else with a usable ``name`` -> a function keeping its declared
+      ``parameters`` if present, else accepting a free-form ``input`` string.
+
+    A tool with no usable name is left untouched so the upstream error surfaces
+    verbatim instead of this code inventing a tool the client never declared.
+
+    Mutates ``body["tools"]`` in place. Returns the rewritten tool names, for
+    logging.
     """
     tools = body.get("tools")
     if not isinstance(tools, list):
         return []
 
     rewritten: list[str] = []
-    for index, tool in enumerate(tools):
-        if not isinstance(tool, dict) or tool.get("type") != "custom":
+    result: list[Any] = []
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            result.append(tool)
             continue
+
+        tool_type = tool.get("type")
+        if tool_type in _MANTLE_SUPPORTED_TOOL_TYPES:
+            result.append(tool)
+            continue
+
         name = tool.get("name")
         if not isinstance(name, str) or not name:
-            # Without a name there is nothing callable to preserve; leave the
-            # tool untouched so the upstream error surfaces verbatim rather
-            # than silently inventing a tool.
+            result.append(tool)
             continue
+
         description = tool.get("description")
         if not isinstance(description, str):
             description = ""
-        converted: dict[str, Any] = {
-            "type": "function",
-            "name": name,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": (
-                            "Raw text payload for this tool, passed through "
-                            "verbatim."
-                        ),
-                    }
-                },
-                "required": ["input"],
-                "additionalProperties": False,
-            },
-        }
-        if description:
-            converted["description"] = description
-        tools[index] = converted
+
+        if tool_type == "namespace":
+            nested = tool.get("tools")
+            if isinstance(nested, list) and nested:
+                for child in nested:
+                    if not isinstance(child, dict):
+                        continue
+                    child_name = child.get("name")
+                    if not isinstance(child_name, str) or not child_name:
+                        continue
+                    child_desc = child.get("description")
+                    if not isinstance(child_desc, str) or not child_desc:
+                        child_desc = description
+                    qualified = f"{name}.{child_name}"
+                    child_params = child.get("parameters")
+                    if not isinstance(child_params, dict):
+                        child_params = _CUSTOM_TOOL_INPUT_SCHEMA
+                    result.append(_function_tool(qualified, child_desc, child_params))
+                    rewritten.append(qualified)
+                continue
+            # An empty namespace has nothing to call; drop it rather than
+            # forwarding a variant that would reject the whole request.
+            rewritten.append(name)
+            continue
+
+        if tool_type == "custom":
+            parameters: Any = _CUSTOM_TOOL_INPUT_SCHEMA
+        else:
+            declared = tool.get("parameters")
+            parameters = declared if isinstance(declared, dict) else _CUSTOM_TOOL_INPUT_SCHEMA
+
+        result.append(_function_tool(name, description, parameters))
         rewritten.append(name)
 
+    if rewritten:
+        body["tools"] = result
     return rewritten
 
 
