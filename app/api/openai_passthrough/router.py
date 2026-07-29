@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.api.openai_passthrough.chat_responses_adapter import (
     MAX_UNSUPPORTED_PARAM_RETRIES,
     chat_request_to_response_request,
+    clamp_reasoning_effort,
     downgrade_unsupported_tools,
     pop_unsupported_parameter,
     response_to_chat_completion,
@@ -399,6 +400,13 @@ async def responses_create(
         logger.info(
             "[OPENAI-PASSTHROUGH] adjusted unsupported input items: %s",
             ", ".join(sanitized_input),
+        )
+    # Clients keep adding reasoning tiers above what mantle serves (Codex
+    # exposes ultra/max); an unknown value fails the whole request.
+    clamped_effort = clamp_reasoning_effort(body)
+    if clamped_effort:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] clamped reasoning effort: %s", clamped_effort
         )
     extra = _passthrough_extra_headers(request)
     base_url, api_key = _resolve_upstream_target(api_key_info)

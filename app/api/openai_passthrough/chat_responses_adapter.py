@@ -157,6 +157,31 @@ _MANTLE_SUPPORTED_INPUT_TYPES = frozenset({
     "item_reference",
 })
 
+# Reasoning-effort values mantle actually serves. Its schema advertises six
+# (none, minimal, low, medium, high, xhigh) and rejects anything else at
+# deserialization:
+#   Invalid 'reasoning': Invalid 'effort': unknown variant `max`, expected one of
+#   `high`, `low`, `medium`, `minimal`, `none`, `xhigh`
+# But probing gpt-oss-120b shows none/minimal/xhigh deserialize and then fail the
+# request with a 500-style "server had an error", so only three are usable.
+# Newer clients offer tiers above high (Codex exposes ultra and max), which must
+# be clamped rather than forwarded.
+_MANTLE_USABLE_REASONING_EFFORTS = ("low", "medium", "high")
+
+# Map every effort a client might send onto a usable tier, preserving relative
+# intent: anything below low rounds up to low (the request must still reason),
+# anything above high clamps to high (the strongest tier available).
+_REASONING_EFFORT_CLAMP = {
+    "none": "low",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "high",
+    "ultra": "high",
+    "max": "high",
+}
+
 # These deserialize but are then rejected semantically with
 # "Unknown input type: <t>" (HTTP 200 carrying an error body). They are the
 # echo of a `custom` tool, which downgrade_unsupported_tools() has already
@@ -277,6 +302,46 @@ def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
     if rewritten:
         body["tools"] = result
     return rewritten
+
+
+def clamp_reasoning_effort(body: dict[str, Any]) -> str | None:
+    """Clamp ``reasoning.effort`` to a tier bedrock-mantle actually serves.
+
+    Mantle rejects unknown values at deserialization, failing the whole request::
+
+        Invalid 'reasoning': Invalid 'effort': unknown variant `max`, expected
+        one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh`
+
+    Clients keep adding tiers above `high` — the Codex CLI exposes `ultra` and
+    `max` — so forwarding the value verbatim breaks every request from a client
+    configured that way, with an error that looks like a proxy bug.
+
+    The advertised set is also wider than the usable one: probing gpt-oss-120b
+    shows `none`, `minimal` and `xhigh` deserialize and then fail the request
+    outright, so those are remapped too rather than passed through.
+
+    Clamping preserves intent in the only direction available: below `low` rounds
+    up (the caller still wants reasoning), above `high` saturates at the
+    strongest usable tier. Returns a "from->to" note when the value changed, else
+    None.
+    """
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return None
+    effort = reasoning.get("effort")
+    if not isinstance(effort, str) or not effort:
+        return None
+
+    normalized = effort.strip().lower()
+    if normalized in _MANTLE_USABLE_REASONING_EFFORTS:
+        return None
+
+    # Unknown future tiers are clamped to `high` rather than dropped: a client
+    # asking for an effort we do not recognise is asking for more reasoning, not
+    # less, and forwarding it would fail the request.
+    replacement = _REASONING_EFFORT_CLAMP.get(normalized, "high")
+    reasoning["effort"] = replacement
+    return f"{effort}->{replacement}"
 
 
 def sanitize_input_items(body: dict[str, Any]) -> list[str]:
