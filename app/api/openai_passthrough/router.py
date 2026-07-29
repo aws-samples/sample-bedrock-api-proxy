@@ -336,7 +336,11 @@ async def chat_completions(
     retries_left = MAX_UNSUPPORTED_PARAM_RETRIES
     while True:
         resp = await get_client().post(
-            upstream_url("/responses", base_url=base_url),
+            upstream_url(
+                "/responses",
+                base_url=base_url,
+                model=upstream_body.get("model"),
+            ),
             json=upstream_body,
             headers=upstream_headers(extra, api_key=api_key),
         )
@@ -616,7 +620,7 @@ async def responses_create(
         )
 
     resp = await get_client().post(
-        upstream_url("/responses", base_url=base_url),
+        upstream_url("/responses", base_url=base_url, model=body.get("model")),
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
     )
@@ -662,7 +666,11 @@ async def _passthrough_request(
     )
     resp = await get_client().request(
         request.method,
-        upstream_url(path, base_url=base_url),
+        upstream_url(
+            path,
+            base_url=base_url,
+            model=body.get("model") if isinstance(body, dict) else None,
+        ),
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
     )

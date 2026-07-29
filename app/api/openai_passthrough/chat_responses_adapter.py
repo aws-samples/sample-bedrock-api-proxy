@@ -157,30 +157,39 @@ _MANTLE_SUPPORTED_INPUT_TYPES = frozenset({
     "item_reference",
 })
 
-# Reasoning-effort values mantle actually serves. Its schema advertises six
-# (none, minimal, low, medium, high, xhigh) and rejects anything else at
-# deserialization:
-#   Invalid 'reasoning': Invalid 'effort': unknown variant `max`, expected one of
-#   `high`, `low`, `medium`, `minimal`, `none`, `xhigh`
-# But probing gpt-oss-120b shows none/minimal/xhigh deserialize and then fail the
-# request with a 500-style "server had an error", so only three are usable.
-# Newer clients offer tiers above high (Codex exposes ultra and max), which must
-# be clamped rather than forwarded.
-_MANTLE_USABLE_REASONING_EFFORTS = ("low", "medium", "high")
+# Reasoning-effort support differs per model family, so clamping has to be
+# model-aware — a blanket clamp throws away capability the caller paid for.
+#
+# The GPT-5.x family (served from /openai/v1) accepts
+#   none, low, medium, high, xhigh, max
+# and rejects `minimal` and `ultra`. The open-weight gpt-oss models (served from
+# /v1) accept only low/medium/high; none/minimal/xhigh deserialize and then fail
+# the request. Both verified by probing upstream.
+_GPT5_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+_GPT_OSS_EFFORTS = ("low", "medium", "high")
 
-# Map every effort a client might send onto a usable tier, preserving relative
-# intent: anything below low rounds up to low (the request must still reason),
-# anything above high clamps to high (the strongest tier available).
-_REASONING_EFFORT_CLAMP = {
+# Where an effort is unsupported, map it to the nearest usable tier in the same
+# direction: below-low rounds up (the caller still wants reasoning), above-high
+# saturates at that family's ceiling.
+_GPT5_EFFORT_CLAMP = {
+    "minimal": "low",   # rejected by name, but means "as little as possible"
+    "ultra": "max",     # a Codex tier above max; max is the real ceiling here
+}
+_GPT_OSS_EFFORT_CLAMP = {
     "none": "low",
     "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
     "xhigh": "high",
     "ultra": "high",
     "max": "high",
 }
+
+
+def _effort_rules(model: str | None) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Pick the (supported, clamp) pair for this model family."""
+    if isinstance(model, str) and model.startswith("openai.gpt-oss"):
+        return _GPT_OSS_EFFORTS, _GPT_OSS_EFFORT_CLAMP
+    return _GPT5_EFFORTS, _GPT5_EFFORT_CLAMP
+
 
 # These deserialize but are then rejected semantically with
 # "Unknown input type: <t>" (HTTP 200 carrying an error body). They are the
@@ -439,25 +448,24 @@ def clamp_tool_choice(body: dict[str, Any]) -> str | None:
 
 
 def clamp_reasoning_effort(body: dict[str, Any]) -> str | None:
-    """Clamp ``reasoning.effort`` to a tier bedrock-mantle actually serves.
+    """Clamp ``reasoning.effort`` to a tier this model actually serves.
 
-    Mantle rejects unknown values at deserialization, failing the whole request::
+    Mantle rejects an unsupported effort outright, failing the whole request::
 
-        Invalid 'reasoning': Invalid 'effort': unknown variant `max`, expected
-        one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh`
+        Invalid 'reasoning': Invalid 'effort': unknown variant `ultra`,
+        Supported values are: 'none', 'minimal', 'low', ...
 
-    Clients keep adding tiers above `high` — the Codex CLI exposes `ultra` and
-    `max` — so forwarding the value verbatim breaks every request from a client
-    configured that way, with an error that looks like a proxy bug.
+    Support differs by model family, so this is deliberately model-aware rather
+    than a single clamp: the GPT-5.x models accept up to ``max``, while the
+    open-weight gpt-oss models top out at ``high``. Clamping everything to
+    ``high`` would silently discard reasoning the caller asked for on a model
+    that could have delivered it.
 
-    The advertised set is also wider than the usable one: probing gpt-oss-120b
-    shows `none`, `minimal` and `xhigh` deserialize and then fail the request
-    outright, so those are remapped too rather than passed through.
+    Where a value is unsupported it maps to the nearest usable tier in the same
+    direction — ``minimal`` rounds up to ``low``, tiers above the ceiling
+    saturate at it — so intent survives even when the literal value cannot.
 
-    Clamping preserves intent in the only direction available: below `low` rounds
-    up (the caller still wants reasoning), above `high` saturates at the
-    strongest usable tier. Returns a "from->to" note when the value changed, else
-    None.
+    Returns a "from->to" note when the value changed, else None.
     """
     reasoning = body.get("reasoning")
     if not isinstance(reasoning, dict):
@@ -466,14 +474,17 @@ def clamp_reasoning_effort(body: dict[str, Any]) -> str | None:
     if not isinstance(effort, str) or not effort:
         return None
 
+    supported, clamp = _effort_rules(body.get("model"))
     normalized = effort.strip().lower()
-    if normalized in _MANTLE_USABLE_REASONING_EFFORTS:
+    if normalized in supported:
+        if normalized != effort:
+            reasoning["effort"] = normalized
+            return f"{effort}->{normalized}"
         return None
 
-    # Unknown future tiers are clamped to `high` rather than dropped: a client
-    # asking for an effort we do not recognise is asking for more reasoning, not
-    # less, and forwarding it would fail the request.
-    replacement = _REASONING_EFFORT_CLAMP.get(normalized, "high")
+    # Fall back to the family's ceiling: an unrecognised tier is a request for
+    # more reasoning, not less, and forwarding it would fail the request.
+    replacement = clamp.get(normalized, supported[-1])
     reasoning["effort"] = replacement
     return f"{effort}->{replacement}"
 

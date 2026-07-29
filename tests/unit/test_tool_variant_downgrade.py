@@ -161,3 +161,47 @@ class TestPreservation:
         before = body["tools"]
         downgrade_unsupported_tools(body)
         assert body["tools"] is before
+
+
+class TestPerModelBasePath:
+    """Mantle serves GPT-5.x from /openai/v1 and gpt-oss from /v1.
+
+    Using the wrong path yields "The model '<id>' does not support the
+    '<path>/responses' API", which misreads as a model-availability problem.
+    """
+
+    def test_gpt5_uses_openai_v1(self):
+        from app.api.openai_passthrough.client import upstream_url
+        url = upstream_url("/responses",
+                           base_url="https://m.example/openai/v1",
+                           model="openai.gpt-5.6-sol")
+        assert url == "https://m.example/openai/v1/responses"
+
+    def test_gpt_oss_rewritten_to_plain_v1(self):
+        from app.api.openai_passthrough.client import upstream_url
+        url = upstream_url("/responses",
+                           base_url="https://m.example/openai/v1",
+                           model="openai.gpt-oss-120b")
+        assert url == "https://m.example/v1/responses"
+
+    def test_gpt5_rewritten_up_from_plain_v1(self):
+        """Works in both directions, whichever way the base URL is configured."""
+        from app.api.openai_passthrough.client import upstream_url
+        url = upstream_url("/responses",
+                           base_url="https://m.example/v1",
+                           model="openai.gpt-5.5")
+        assert url == "https://m.example/openai/v1/responses"
+
+    def test_no_model_leaves_path_alone(self):
+        """Model-independent calls such as /models must not be rewritten."""
+        from app.api.openai_passthrough.client import upstream_url
+        assert upstream_url("/models", base_url="https://m.example/v1") == \
+            "https://m.example/v1/models"
+
+    def test_unrecognised_base_path_untouched(self):
+        """A custom provider endpoint should pass through verbatim."""
+        from app.api.openai_passthrough.client import upstream_url
+        url = upstream_url("/responses",
+                           base_url="https://custom.example/api",
+                           model="openai.gpt-5.6-sol")
+        assert url == "https://custom.example/api/responses"

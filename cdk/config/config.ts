@@ -202,10 +202,10 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // OpenAI-Compatible API (Bedrock Mantle)
     enableOpenaiCompat: false,
     enableOpenaiPassthrough: true,
-    // Upstream Mantle base URL — path is `/v1` (see the prod block for why
-    // `/openai/v1` is wrong here). Override with MANTLE_ENDPOINT_URL to point a
-    // dev deploy at a different region.
-    openaiBaseUrl: 'https://bedrock-mantle.us-west-2.api.aws/v1',
+    // Upstream Mantle base URL (see the prod block: the proxy switches between
+    // /openai/v1 and /v1 per model). Override with MANTLE_ENDPOINT_URL to point
+    // a dev deploy at a different region.
+    openaiBaseUrl: 'https://bedrock-mantle.us-west-2.api.aws/openai/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -316,15 +316,14 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // OpenAI-Compatible API (Bedrock Mantle)
     enableOpenaiCompat: false,
     enableOpenaiPassthrough: true,
-    // Upstream Mantle base URL. The path is `/v1` — this is the upstream we
-    // call, not the `/openai/v1/*` path the proxy exposes to clients, and the
-    // two are deliberately different. Using `/openai/v1` here makes Mantle
-    // reject every request with
-    //   "The model '<id>' does not support the '/openai/v1/responses' API"
-    // which reads like a model problem but is really a wrong base path.
-    // Leaving it unset entirely produces a scheme-less URL and a 502, which is
-    // why validateConfig() rejects that combination.
-    openaiBaseUrl: 'https://bedrock-mantle.us-east-2.api.aws/v1',
+    // Upstream Mantle base URL. `/openai/v1` serves the OpenAI GPT-5.x family
+    // and is the documented path for them; the open-weight gpt-oss models are
+    // served from `/v1` instead. The proxy rewrites the path per request based
+    // on the model id (see upstream_url in client.py), so this default only
+    // sets the host and the GPT-5.x path.
+    // Leaving it unset produces a scheme-less URL and a 502, which is why
+    // validateConfig() rejects that combination.
+    openaiBaseUrl: 'https://bedrock-mantle.us-east-2.api.aws/openai/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -572,17 +571,18 @@ export function validateConfig(config: EnvironmentConfig, environmentName: strin
           `openaiBaseUrl must use https. Got: ${config.openaiBaseUrl}`
         );
       }
+      // Mantle serves two disjoint base paths, and which one is correct depends
+      // on the model, not on configuration:
+      //   /openai/v1 -> the OpenAI GPT-5.x family
+      //   /v1        -> the open-weight gpt-oss models
+      // The proxy picks per request (see upstream_url in client.py), so this
+      // value only needs a valid /v1-suffixed path; do not "correct" one to the
+      // other here.
       const trimmedPath = url.pathname.replace(/\/+$/, '');
-      if (trimmedPath.endsWith('/openai/v1')) {
+      if (!trimmedPath.endsWith('/v1')) {
         errors.push(
-          `openaiBaseUrl must not end in '/openai/v1' — that is the path the ` +
-          `proxy exposes to clients, not the upstream path. Use '/v1' instead: ` +
-          `${url.origin}/v1 (got ${config.openaiBaseUrl})`
-        );
-      } else if (!trimmedPath.endsWith('/v1')) {
-        errors.push(
-          `openaiBaseUrl should end in '/v1' (the upstream OpenAI-compatible ` +
-          `base path). Got: ${config.openaiBaseUrl}`
+          `openaiBaseUrl should end in '/v1' or '/openai/v1' (the upstream ` +
+          `OpenAI-compatible base path). Got: ${config.openaiBaseUrl}`
         );
       }
     }

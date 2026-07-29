@@ -102,7 +102,14 @@ async def open_upstream_stream(
     client = get_client()
     headers = upstream_headers(extra_headers, api_key=api_key)
     req = client.build_request(
-        method, upstream_url(path, base_url=base_url), json=body, headers=headers
+        method,
+        upstream_url(
+            path,
+            base_url=base_url,
+            model=body.get("model") if isinstance(body, dict) else None,
+        ),
+        json=body,
+        headers=headers,
     )
     try:
         resp = await client.send(req, stream=True)
