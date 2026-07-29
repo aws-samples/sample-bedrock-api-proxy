@@ -8,6 +8,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
@@ -387,6 +388,25 @@ export class ECSStack extends cdk.Stack {
         },
       });
 
+      // Optional custom domain: attach an alternate domain name + ACM cert so
+      // the distribution serves HTTPS for e.g. bedrock-api.example.com.
+      // Without these, CloudFront only answers on its default *.cloudfront.net
+      // hostname and fails the TLS handshake for any custom domain.
+      // The ACM cert MUST live in us-east-1 (a CloudFront requirement).
+      const customDomain = config.cloudFrontDomainName;
+      const customCertArn = config.cloudFrontCertificateArn;
+      if (Boolean(customDomain) !== Boolean(customCertArn)) {
+        throw new Error(
+          'cloudFrontDomainName and cloudFrontCertificateArn must be set together. ' +
+          `Got domain=${customDomain ?? 'unset'}, certArn=${customCertArn ?? 'unset'}. ` +
+          'A domain without a matching us-east-1 ACM cert would deploy a distribution ' +
+          'that rejects the custom hostname.'
+        );
+      }
+      const customCert = customDomain && customCertArn
+        ? acm.Certificate.fromCertificateArn(this, 'CloudFrontCertificate', customCertArn)
+        : undefined;
+
       // Create CloudFront Distribution
       // NOTE: readTimeout (default 60s, max 180s with quota increase) affects:
       //   - Streaming: only time-to-first-byte (message_start arrives quickly, so 60s is fine)
@@ -395,6 +415,9 @@ export class ECSStack extends cdk.Stack {
       //   responses, request AWS quota increase via Support Console.
       const distribution = new cloudfront.Distribution(this, 'Distribution', {
         comment: `Anthropic Proxy ${config.environmentName} - HTTPS termination`,
+        ...(customDomain && customCert
+          ? { domainNames: [customDomain], certificate: customCert }
+          : {}),
         defaultBehavior: {
           origin: new origins.HttpOrigin(this.alb.loadBalancerDnsName, {
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
