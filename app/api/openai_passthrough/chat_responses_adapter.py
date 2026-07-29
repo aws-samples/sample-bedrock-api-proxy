@@ -119,6 +119,75 @@ def reset_unsupported_param_cache_for_testing() -> None:
     _unsupported_param_cache.clear()
 
 
+def downgrade_custom_tools(body: dict[str, Any]) -> list[str]:
+    """Rewrite Responses-API ``custom`` tools as ``function`` tools in place.
+
+    OpenAI's Responses API accepts ``{"type": "custom"}`` tools, which take
+    free-form text instead of JSON arguments. The OpenAI Codex CLI uses one for
+    ``apply_patch``. bedrock-mantle does not implement the variant and rejects
+    the whole request::
+
+        Failed to deserialize the JSON body into the target type: ?[0]:
+        Invalid 'tools': unknown variant `custom`, expected `function` or `mcp`
+
+    Note the error names no parameter (``param`` is null) and is a
+    deserialization failure, so the learned-unsupported-param path in
+    pop_unsupported_parameter() cannot handle it — the offending value is a
+    variant tag inside an array, not a top-level field.
+
+    Dropping the tool is not an option: for Codex, ``apply_patch`` is how the
+    model edits files. Instead express it as the nearest supported equivalent —
+    a function with a single required string parameter named ``input``. That is
+    the same argument name OpenAI's native ``custom`` tool delivers, so the
+    client reads the tool call unchanged. Verified against mantle: the model
+    emits a well-formed apply_patch call with the patch text in
+    ``arguments.input``.
+
+    Returns the names of the rewritten tools, for logging.
+    """
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    rewritten: list[str] = []
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict) or tool.get("type") != "custom":
+            continue
+        name = tool.get("name")
+        if not isinstance(name, str) or not name:
+            # Without a name there is nothing callable to preserve; leave the
+            # tool untouched so the upstream error surfaces verbatim rather
+            # than silently inventing a tool.
+            continue
+        description = tool.get("description")
+        if not isinstance(description, str):
+            description = ""
+        converted: dict[str, Any] = {
+            "type": "function",
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": (
+                            "Raw text payload for this tool, passed through "
+                            "verbatim."
+                        ),
+                    }
+                },
+                "required": ["input"],
+                "additionalProperties": False,
+            },
+        }
+        if description:
+            converted["description"] = description
+        tools[index] = converted
+        rewritten.append(name)
+
+    return rewritten
+
+
 def chat_request_to_response_request(body: dict[str, Any]) -> dict[str, Any]:
     """Convert an OpenAI Chat Completions body into a Responses API body."""
     result: dict[str, Any] = {"model": body.get("model", "")}
