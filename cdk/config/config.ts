@@ -200,8 +200,11 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // otelTraceSamplingRatio: 1.0,
 
     // OpenAI-Compatible API (Bedrock Mantle)
+    // Both are opt-in: they require a Bedrock API key, which validateConfig()
+    // enforces, so enabling them by default would block every deploy that only
+    // needs the Anthropic surface. Turn on with ENABLE_OPENAI_PASSTHROUGH=true.
     enableOpenaiCompat: false,
-    enableOpenaiPassthrough: true,
+    enableOpenaiPassthrough: false,
     // Upstream Mantle base URL (see the prod block: the proxy switches between
     // /openai/v1 and /v1 per model). Override with MANTLE_ENDPOINT_URL to point
     // a dev deploy at a different region.
@@ -314,8 +317,10 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // otelTraceSamplingRatio: 0.1,
 
     // OpenAI-Compatible API (Bedrock Mantle)
+    // Opt-in — see the dev block. Enable with ENABLE_OPENAI_PASSTHROUGH=true
+    // (a Bedrock API key is then required).
     enableOpenaiCompat: false,
-    enableOpenaiPassthrough: true,
+    enableOpenaiPassthrough: false,
     // Upstream Mantle base URL. `/openai/v1` serves the OpenAI GPT-5.x family
     // and is the documented path for them; the open-weight gpt-oss models are
     // served from `/v1` instead. The proxy rewrites the path per request based

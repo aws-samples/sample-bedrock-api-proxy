@@ -202,3 +202,19 @@ def test_env_local_example_is_committable():
     assert not check.stdout.startswith("!!"), (
         f"cdk/.env.local.example is ignored: {check.stdout!r}"
     )
+
+
+def test_openai_passthrough_is_opt_in_by_default():
+    """A fresh checkout must synth with no credentials configured.
+
+    enableOpenaiPassthrough used to default to true, and validateConfig requires
+    a Bedrock API key whenever it is on — so a clone with no .env.local was
+    blocked from deploying even when it only needed the Anthropic surface.
+    """
+    config_ts = (REPO_ROOT / "cdk" / "config" / "config.ts").read_text()
+    assert "enableOpenaiPassthrough: true" not in config_ts, (
+        "enableOpenaiPassthrough must default to false — enabling it forces "
+        "every deployer to obtain a Bedrock API key before they can deploy"
+    )
+    # Both dev and prod blocks declare it.
+    assert config_ts.count("enableOpenaiPassthrough: false") == 2
