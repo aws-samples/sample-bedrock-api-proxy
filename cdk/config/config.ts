@@ -342,11 +342,16 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // deploying with it false tears the distribution down.
     enableCloudFront: true,
     cloudFrontOriginReadTimeout: 120,  // 120s is the current self-service max; request AWS quota increase to go higher
-    // Custom domain, served via a wildcard ACM cert in us-east-1 (CloudFront
-    // only accepts certs from that region). DNS CNAME for this host already
-    // points at the distribution.
-    // Set via CLOUDFRONT_DOMAIN_NAME / CLOUDFRONT_CERTIFICATE_ARN (see
-    // cdk/.env.local.example); leave unset for the default cloudfront.net host.
+    // Optional custom domain. Both values must be set together, and the ACM
+    // cert must live in us-east-1 (CloudFront accepts no other region) —
+    // validateConfig() enforces both rules. Point a DNS CNAME for the host at
+    // the distribution.
+    //
+    // These are deployment-specific, so set them per checkout rather than
+    // committing them: export CLOUDFRONT_DOMAIN_NAME and
+    // CLOUDFRONT_CERTIFICATE_ARN, or put them in cdk/.env.local (gitignored,
+    // see .env.local.example). Leave unset to serve the default
+    // *.cloudfront.net hostname.
     // cloudFrontDomainName: 'api.example.com',
     // cloudFrontCertificateArn: 'arn:aws:acm:us-east-1:<account-id>:certificate/<cert-id>',
 
@@ -481,6 +486,8 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ...(process.env.AGENTCORE_GATEWAY_REGION && { agentcoreGatewayRegion: process.env.AGENTCORE_GATEWAY_REGION }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_USES && { webFetchDefaultMaxUses: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_USES) }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS && { webFetchDefaultMaxContentTokens: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS) }),
+    ...(process.env.CLOUDFRONT_DOMAIN_NAME && { cloudFrontDomainName: process.env.CLOUDFRONT_DOMAIN_NAME }),
+    ...(process.env.CLOUDFRONT_CERTIFICATE_ARN && { cloudFrontCertificateArn: process.env.CLOUDFRONT_CERTIFICATE_ARN }),
     ...(process.env.DEFAULT_CACHE_TTL && { defaultCacheTtl: process.env.DEFAULT_CACHE_TTL }),
     ...(process.env.STRIP_CACHE_SCOPE && { stripCacheScope: process.env.STRIP_CACHE_SCOPE.toLowerCase() === 'true' }),
   };
