@@ -119,6 +119,458 @@ def reset_unsupported_param_cache_for_testing() -> None:
     _unsupported_param_cache.clear()
 
 
+# bedrock-mantle implements only two Responses-API tool variants. Everything
+# else in the OpenAI spec (custom, namespace, web_search, code_interpreter,
+# file_search, image_generation, computer_use_preview, local_shell, ...) is
+# rejected at deserialization time, failing the entire request. Verified by
+# probing the upstream directly.
+_MANTLE_SUPPORTED_TOOL_TYPES = frozenset({"function", "mcp"})
+
+# A `custom` tool takes free-form text rather than JSON arguments. The closest
+# function equivalent is one string parameter, and OpenAI's native custom tool
+# hands the client that text as `input`, so reusing the name keeps the tool call
+# readable by an unmodified client.
+_CUSTOM_TOOL_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "input": {
+            "type": "string",
+            "description": "Raw text payload for this tool, passed through verbatim.",
+        }
+    },
+    "required": ["input"],
+    "additionalProperties": False,
+}
+
+
+# Conversation-history item types mantle can deserialize. Anything outside this
+# set fails the whole request with
+#   Invalid 'input': value did not match any expected variant
+# before the model is even consulted. Verified by probing each type upstream.
+_MANTLE_SUPPORTED_INPUT_TYPES = frozenset({
+    "message",
+    "reasoning",
+    "function_call",
+    "function_call_output",
+    "mcp_call",
+    "mcp_list_tools",
+    "item_reference",
+})
+
+# Reasoning-effort support differs per model family, so clamping has to be
+# model-aware — a blanket clamp throws away capability the caller paid for.
+#
+# The GPT-5.x family (served from /openai/v1) accepts
+#   none, low, medium, high, xhigh, max
+# and rejects `minimal` and `ultra`. The open-weight gpt-oss models (served from
+# /v1) accept only low/medium/high; none/minimal/xhigh deserialize and then fail
+# the request. Both verified by probing upstream.
+_GPT5_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+_GPT_OSS_EFFORTS = ("low", "medium", "high")
+
+# Where an effort is unsupported, map it to the nearest usable tier in the same
+# direction: below-low rounds up (the caller still wants reasoning), above-high
+# saturates at that family's ceiling.
+_GPT5_EFFORT_CLAMP = {
+    "minimal": "low",   # rejected by name, but means "as little as possible"
+    "ultra": "max",     # a Codex tier above max; max is the real ceiling here
+}
+_GPT_OSS_EFFORT_CLAMP = {
+    "none": "low",
+    "minimal": "low",
+    "xhigh": "high",
+    "ultra": "high",
+    "max": "high",
+}
+
+
+def _effort_rules(model: str | None) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Pick the (supported, clamp) pair for this model family."""
+    if isinstance(model, str) and model.startswith("openai.gpt-oss"):
+        return _GPT_OSS_EFFORTS, _GPT_OSS_EFFORT_CLAMP
+    return _GPT5_EFFORTS, _GPT5_EFFORT_CLAMP
+
+
+# These deserialize but are then rejected semantically with
+# "Unknown input type: <t>" (HTTP 200 carrying an error body). They are the
+# echo of a `custom` tool, which downgrade_unsupported_tools() has already
+# rewritten as a function — so the history has to be rewritten to match, or the
+# next turn fails on the tool call the model itself produced.
+_CUSTOM_CALL_TO_FUNCTION_CALL = {
+    "custom_tool_call": "function_call",
+    "custom_tool_call_output": "function_call_output",
+}
+
+
+def _function_tool(name: str, description: str, parameters: Any) -> dict[str, Any]:
+    """Build a Responses-API function tool, omitting an empty description."""
+    tool: dict[str, Any] = {
+        "type": "function",
+        "name": name,
+        "parameters": _normalize_null_required_fields(parameters),
+    }
+    if isinstance(description, str) and description:
+        tool["description"] = description
+    return tool
+
+
+def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
+    """Rewrite tool variants bedrock-mantle rejects into ``function`` tools.
+
+    Mantle accepts only ``function`` and ``mcp``; any other variant fails the
+    whole request at deserialization::
+
+        Failed to deserialize the JSON body into the target type: ?[12]:
+        Invalid 'tools': unknown variant `namespace`, expected `function` or `mcp`
+
+    The error names no parameter (``param`` is null), so the learned-unsupported
+    -param retry in pop_unsupported_parameter() cannot help: the offending value
+    is a variant tag inside an array, not a top-level field. And because one bad
+    entry rejects the entire array, a single unsupported tool disables every tool
+    in the request.
+
+    Dropping the tools is not viable — for the Codex CLI ``apply_patch`` is how
+    the model edits files. Each variant is instead mapped to the nearest
+    supported shape:
+
+    * ``custom`` -> a function taking one string parameter ``input`` (the
+      variant carries free-form text, and ``input`` is the argument name
+      OpenAI's own custom tool produces).
+    * ``namespace`` -> its nested tools flattened to top level as
+      ``<namespace>.<tool>``. Dotted names are accepted upstream and preserve
+      the grouping the client sent, so the returned call still identifies the
+      intended tool.
+    * anything else with a usable ``name`` -> a function keeping its declared
+      ``parameters`` if present, else accepting a free-form ``input`` string.
+
+    A tool with no usable name is left untouched so the upstream error surfaces
+    verbatim instead of this code inventing a tool the client never declared.
+
+    Mutates ``body["tools"]`` in place. Returns the rewritten tool names, for
+    logging.
+    """
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    rewritten: list[str] = []
+    result: list[Any] = []
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            result.append(tool)
+            continue
+
+        tool_type = tool.get("type")
+        if tool_type in _MANTLE_SUPPORTED_TOOL_TYPES:
+            result.append(tool)
+            continue
+
+        name = tool.get("name")
+        if not isinstance(name, str) or not name:
+            result.append(tool)
+            continue
+
+        description = tool.get("description")
+        if not isinstance(description, str):
+            description = ""
+
+        if tool_type == "namespace":
+            nested = tool.get("tools")
+            if isinstance(nested, list) and nested:
+                for child in nested:
+                    if not isinstance(child, dict):
+                        continue
+                    child_name = child.get("name")
+                    if not isinstance(child_name, str) or not child_name:
+                        continue
+                    child_desc = child.get("description")
+                    if not isinstance(child_desc, str) or not child_desc:
+                        child_desc = description
+                    qualified = f"{name}.{child_name}"
+                    child_params = child.get("parameters")
+                    if not isinstance(child_params, dict):
+                        child_params = _CUSTOM_TOOL_INPUT_SCHEMA
+                    result.append(_function_tool(qualified, child_desc, child_params))
+                    rewritten.append(qualified)
+                continue
+            # An empty namespace has nothing to call; drop it rather than
+            # forwarding a variant that would reject the whole request.
+            rewritten.append(name)
+            continue
+
+        if tool_type == "custom":
+            parameters: Any = _CUSTOM_TOOL_INPUT_SCHEMA
+        else:
+            declared = tool.get("parameters")
+            parameters = declared if isinstance(declared, dict) else _CUSTOM_TOOL_INPUT_SCHEMA
+
+        result.append(_function_tool(name, description, parameters))
+        rewritten.append(name)
+
+    if rewritten:
+        body["tools"] = result
+    return rewritten
+
+
+# tool_choice values mantle serves. It rejects everything else with
+#   does not support tool_choice '"required"' ... Supported options: ["auto"]
+# so a client asking the model to be forced into (or out of) a tool call fails
+# the whole request.
+_MANTLE_SUPPORTED_TOOL_CHOICES = frozenset({"auto"})
+
+# Content-part types accepted inside a user/system/developer message.
+_MANTLE_SUPPORTED_CONTENT_PARTS = frozenset({"input_text"})
+
+
+def normalize_message_content(body: dict[str, Any]) -> list[str]:
+    """Reshape message content into the narrow form mantle accepts.
+
+    Two constraints, both found by probing the upstream:
+
+    * Assistant messages must carry a plain string. A content-part array — which
+      is what the Responses API specifies and what clients replay from a previous
+      turn — triggers ``SubmitRequestFailure ... 219 validation errors``.
+    * User/system/developer messages accept only ``input_text`` parts. ``text``
+      (the Chat Completions spelling), ``refusal``, ``input_audio`` and
+      ``input_image`` are rejected at deserialization; ``input_file`` fails
+      server-side.
+
+    Non-text parts cannot be represented, so they are replaced with a short
+    textual placeholder rather than dropped silently: the model still sees that
+    an attachment was present, and the turn structure stays intact.
+
+    Mutates ``body["input"]`` in place. Returns notes describing what changed.
+    """
+    items = body.get("input")
+    if not isinstance(items, list):
+        return []
+
+    notes: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in (None, "message"):
+            continue
+        content = item.get("content")
+        role = item.get("role")
+
+        if role == "assistant":
+            if isinstance(content, list):
+                text = _content_to_text(content)
+                item["content"] = text
+                notes.append("assistant content[]->str")
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        converted: list[Any] = []
+        changed = False
+        for part in content:
+            if not isinstance(part, dict):
+                converted.append(part)
+                continue
+            part_type = part.get("type")
+            if part_type in _MANTLE_SUPPORTED_CONTENT_PARTS:
+                converted.append(part)
+                continue
+            text = part.get("text")
+            if part_type == "text" and isinstance(text, str):
+                # Same payload, different spelling.
+                converted.append({"type": "input_text", "text": text})
+                changed = True
+                notes.append("text->input_text")
+                continue
+            placeholder = _content_part_placeholder(part_type, part)
+            converted.append({"type": "input_text", "text": placeholder})
+            changed = True
+            notes.append(f"{part_type}->input_text placeholder")
+        if changed:
+            item["content"] = converted
+
+    return notes
+
+
+def _content_part_placeholder(part_type: Any, part: dict[str, Any]) -> str:
+    """Describe an unrepresentable content part as text."""
+    if part_type == "refusal":
+        refusal = part.get("refusal")
+        return str(refusal) if isinstance(refusal, str) and refusal else "[refusal]"
+    if part_type == "input_image":
+        return "[image omitted: not supported by this upstream model]"
+    if part_type == "input_file":
+        name = part.get("filename")
+        label = f" {name}" if isinstance(name, str) and name else ""
+        return f"[file{label} omitted: not supported by this upstream model]"
+    if part_type == "input_audio":
+        return "[audio omitted: not supported by this upstream model]"
+    text = part.get("text")
+    if isinstance(text, str) and text:
+        return text
+    return f"[{part_type or 'content'} omitted: not supported by this upstream model]"
+
+
+def clamp_tool_choice(body: dict[str, Any]) -> str | None:
+    """Reduce ``tool_choice`` to ``auto``, the only value mantle serves.
+
+    Rejecting the request is worse than relaxing the constraint: ``required`` and
+    a named-function choice are both requests to *use* tools, and ``auto`` still
+    permits that — the model simply is not forced. ``none`` is the one case where
+    intent is inverted, so the tools are removed instead of silently allowing
+    calls the client asked to suppress.
+
+    Returns a note describing the change, or None if nothing changed.
+    """
+    if "tool_choice" not in body:
+        return None
+    choice = body["tool_choice"]
+
+    if isinstance(choice, str):
+        if choice in _MANTLE_SUPPORTED_TOOL_CHOICES:
+            return None
+        if choice == "none":
+            # Honour "do not call tools" by withholding the tools entirely.
+            body["tool_choice"] = "auto"
+            if body.get("tools"):
+                body["tools"] = []
+                return "tool_choice none->auto (tools withheld)"
+            return "tool_choice none->auto"
+        body["tool_choice"] = "auto"
+        return f"tool_choice {choice}->auto"
+
+    if isinstance(choice, dict):
+        described = choice.get("name") or choice.get("type") or "object"
+        body["tool_choice"] = "auto"
+        return f"tool_choice {described}->auto"
+
+    return None
+
+
+def clamp_reasoning_effort(body: dict[str, Any]) -> str | None:
+    """Clamp ``reasoning.effort`` to a tier this model actually serves.
+
+    Mantle rejects an unsupported effort outright, failing the whole request::
+
+        Invalid 'reasoning': Invalid 'effort': unknown variant `ultra`,
+        Supported values are: 'none', 'minimal', 'low', ...
+
+    Support differs by model family, so this is deliberately model-aware rather
+    than a single clamp: the GPT-5.x models accept up to ``max``, while the
+    open-weight gpt-oss models top out at ``high``. Clamping everything to
+    ``high`` would silently discard reasoning the caller asked for on a model
+    that could have delivered it.
+
+    Where a value is unsupported it maps to the nearest usable tier in the same
+    direction — ``minimal`` rounds up to ``low``, tiers above the ceiling
+    saturate at it — so intent survives even when the literal value cannot.
+
+    Returns a "from->to" note when the value changed, else None.
+    """
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return None
+    effort = reasoning.get("effort")
+    if not isinstance(effort, str) or not effort:
+        return None
+
+    supported, clamp = _effort_rules(body.get("model"))
+    normalized = effort.strip().lower()
+    if normalized in supported:
+        if normalized != effort:
+            reasoning["effort"] = normalized
+            return f"{effort}->{normalized}"
+        return None
+
+    # Fall back to the family's ceiling: an unrecognised tier is a request for
+    # more reasoning, not less, and forwarding it would fail the request.
+    replacement = clamp.get(normalized, supported[-1])
+    reasoning["effort"] = replacement
+    return f"{effort}->{replacement}"
+
+
+def sanitize_input_items(body: dict[str, Any]) -> list[str]:
+    """Drop or rewrite conversation-history items mantle cannot accept.
+
+    ``body["input"]`` carries the prior turns of the conversation. Mantle
+    deserializes only a subset of the OpenAI item types; anything else fails the
+    entire request before the model is consulted::
+
+        Failed to deserialize the JSON body into the target type:
+        Invalid 'input': value did not match any expected variant
+
+    Since one bad item rejects the whole array, a single unsupported entry makes
+    every subsequent turn fail — the conversation becomes permanently stuck,
+    because the offending item stays in the history the client replays.
+
+    Two classes are handled:
+
+    * ``custom_tool_call`` / ``custom_tool_call_output`` are renamed to their
+      ``function_call`` equivalents. These are the echo of a ``custom`` tool that
+      downgrade_unsupported_tools() already rewrote as a function, so the history
+      must be rewritten the same way to stay consistent with the declared tools.
+      The free-form ``input`` field becomes JSON ``arguments`` to match.
+    * Items whose type mantle does not implement at all (``web_search_call``,
+      ``local_shell_call``, ``computer_call``, ``file_search_call``,
+      ``image_generation_call``, ``code_interpreter_call``, ...) are dropped.
+      They describe tool activity that did not happen upstream, so removing them
+      loses provider-side annotations but keeps the conversation usable.
+
+    Items with no ``type`` are left alone: mantle accepts a bare
+    ``{"role", "content"}`` message, which is what clients commonly send.
+
+    Mutates ``body["input"]`` in place. Returns human-readable notes describing
+    what changed, for logging.
+    """
+    items = body.get("input")
+    if not isinstance(items, list):
+        return []
+
+    notes: list[str] = []
+    result: list[Any] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+
+        item_type = item.get("type")
+        if item_type is None:
+            # A plain {"role": ..., "content": ...} message.
+            result.append(item)
+            continue
+
+        replacement_type = _CUSTOM_CALL_TO_FUNCTION_CALL.get(item_type)
+        if replacement_type is not None:
+            converted = {
+                key: value for key, value in item.items() if key != "input"
+            }
+            converted["type"] = replacement_type
+            if replacement_type == "function_call":
+                # A custom tool call carries free-form text in `input`; the
+                # function equivalent expects a JSON `arguments` string whose
+                # shape matches _CUSTOM_TOOL_INPUT_SCHEMA.
+                if "arguments" not in converted:
+                    raw = item.get("input")
+                    converted["arguments"] = json.dumps(
+                        {"input": raw if isinstance(raw, str) else ""}
+                    )
+                converted.setdefault("name", item.get("name", ""))
+            result.append(converted)
+            notes.append(f"{item_type}->{replacement_type}")
+            continue
+
+        if item_type not in _MANTLE_SUPPORTED_INPUT_TYPES:
+            notes.append(f"dropped {item_type}")
+            continue
+
+        result.append(item)
+
+    if notes:
+        body["input"] = result
+    return notes
+
+
 def chat_request_to_response_request(body: dict[str, Any]) -> dict[str, Any]:
     """Convert an OpenAI Chat Completions body into a Responses API body."""
     result: dict[str, Any] = {"model": body.get("model", "")}

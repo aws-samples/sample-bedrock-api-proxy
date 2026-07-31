@@ -116,6 +116,8 @@ export interface EnvironmentConfig {
   // CloudFront Configuration
   enableCloudFront: boolean;            // Enable CloudFront distribution with HTTPS
   cloudFrontOriginReadTimeout: number;  // Origin read timeout in seconds (up to 120 self-service; higher via AWS quota increase)
+  cloudFrontDomainName?: string;        // Custom domain (alternate domain name), e.g. bedrock-api.example.com
+  cloudFrontCertificateArn?: string;    // ACM cert ARN covering the custom domain — MUST be in us-east-1
 
   // Tags
   tags: { [key: string]: string };
@@ -198,9 +200,15 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // otelTraceSamplingRatio: 1.0,
 
     // OpenAI-Compatible API (Bedrock Mantle)
+    // Both are opt-in: they require a Bedrock API key, which validateConfig()
+    // enforces, so enabling them by default would block every deploy that only
+    // needs the Anthropic surface. Turn on with ENABLE_OPENAI_PASSTHROUGH=true.
     enableOpenaiCompat: false,
-    enableOpenaiPassthrough: true,
-    // openaiBaseUrl: 'https://bedrock-mantle.us-east-1.api.aws/v1',
+    enableOpenaiPassthrough: false,
+    // Upstream Mantle base URL (see the prod block: the proxy switches between
+    // /openai/v1 and /v1 per model). Override with MANTLE_ENDPOINT_URL to point
+    // a dev deploy at a different region.
+    openaiBaseUrl: 'https://bedrock-mantle.us-west-2.api.aws/openai/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -231,12 +239,18 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
   },
 
   prod: {
-    region: process.env.AWS_REGION || 'us-west-2',
+    // Live prod runs in us-east-1. AWS_REGION still wins so a deploy can be
+    // retargeted, but the fallback must not point at a region where prod has
+    // no infrastructure.
+    region: process.env.AWS_REGION || 'us-east-1',
     environmentName: 'prod',
 
     // VPC
     vpcCidr: '10.1.0.0/16',
-    maxAzs: 3,
+    // Pinned to 2 to match the deployed prod VPC (subnets in us-east-1a/1b).
+    // Raising this recomputes subnet CIDRs and forces destructive replacement
+    // of the live private subnets. Do not bump without a planned VPC migration.
+    maxAzs: 2,
 
     // ECS
     ecsDesiredCount: 2,
@@ -303,9 +317,18 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     // otelTraceSamplingRatio: 0.1,
 
     // OpenAI-Compatible API (Bedrock Mantle)
+    // Opt-in — see the dev block. Enable with ENABLE_OPENAI_PASSTHROUGH=true
+    // (a Bedrock API key is then required).
     enableOpenaiCompat: false,
-    enableOpenaiPassthrough: true,
-    // openaiBaseUrl: 'https://bedrock-mantle.us-east-1.api.aws/v1',
+    enableOpenaiPassthrough: false,
+    // Upstream Mantle base URL. `/openai/v1` serves the OpenAI GPT-5.x family
+    // and is the documented path for them; the open-weight gpt-oss models are
+    // served from `/v1` instead. The proxy rewrites the path per request based
+    // on the model id (see upstream_url in client.py), so this default only
+    // sets the host and the GPT-5.x path.
+    // Leaving it unset produces a scheme-less URL and a 502, which is why
+    // validateConfig() rejects that combination.
+    openaiBaseUrl: 'https://bedrock-mantle.us-east-2.api.aws/openai/v1',
 
     // Admin Portal
     adminPortalEnabled: true,
@@ -320,8 +343,22 @@ export const environments: { [key: string]: EnvironmentConfigWithoutRuntime } = 
     dynamodbBillingMode: 'PAY_PER_REQUEST',
 
     // CloudFront (HTTPS)
-    enableCloudFront: false,
+    // Live prod serves HTTPS through CloudFront, so this must stay true —
+    // deploying with it false tears the distribution down.
+    enableCloudFront: true,
     cloudFrontOriginReadTimeout: 120,  // 120s is the current self-service max; request AWS quota increase to go higher
+    // Optional custom domain. Both values must be set together, and the ACM
+    // cert must live in us-east-1 (CloudFront accepts no other region) —
+    // validateConfig() enforces both rules. Point a DNS CNAME for the host at
+    // the distribution.
+    //
+    // These are deployment-specific, so set them per checkout rather than
+    // committing them: export CLOUDFRONT_DOMAIN_NAME and
+    // CLOUDFRONT_CERTIFICATE_ARN, or put them in cdk/.env.local (gitignored,
+    // see .env.local.example). Leave unset to serve the default
+    // *.cloudfront.net hostname.
+    // cloudFrontDomainName: 'api.example.com',
+    // cloudFrontCertificateArn: 'arn:aws:acm:us-east-1:<account-id>:certificate/<cert-id>',
 
     // Logging
     logRetentionDays: 30,
@@ -425,7 +462,7 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ? process.env.ENABLE_CLOUDFRONT.toLowerCase() === 'true'
     : config.enableCloudFront;
 
-  return {
+  const resolved: EnvironmentConfig = {
     ...config,
     platform,
     launchType,
@@ -454,7 +491,127 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     ...(process.env.AGENTCORE_GATEWAY_REGION && { agentcoreGatewayRegion: process.env.AGENTCORE_GATEWAY_REGION }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_USES && { webFetchDefaultMaxUses: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_USES) }),
     ...(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS && { webFetchDefaultMaxContentTokens: parseInt(process.env.WEB_FETCH_DEFAULT_MAX_CONTENT_TOKENS) }),
+    ...(process.env.CLOUDFRONT_DOMAIN_NAME && { cloudFrontDomainName: process.env.CLOUDFRONT_DOMAIN_NAME }),
+    ...(process.env.CLOUDFRONT_CERTIFICATE_ARN && { cloudFrontCertificateArn: process.env.CLOUDFRONT_CERTIFICATE_ARN }),
     ...(process.env.DEFAULT_CACHE_TTL && { defaultCacheTtl: process.env.DEFAULT_CACHE_TTL }),
     ...(process.env.STRIP_CACHE_SCOPE && { stripCacheScope: process.env.STRIP_CACHE_SCOPE.toLowerCase() === 'true' }),
   };
+
+  validateConfig(resolved, environmentName);
+  return resolved;
+}
+
+/**
+ * Fail the synth when a feature is enabled but its required configuration is
+ * missing.
+ *
+ * This runs inside getConfig() rather than in scripts/deploy.sh on purpose:
+ * `cdk deploy`/`diff`/`synth` are routinely invoked directly (the deploy script
+ * is only one entry point), so a shell-only guard is trivially bypassed. Every
+ * path that builds a template goes through here.
+ *
+ * The failure mode this exists to prevent: a half-configured feature deploys
+ * "successfully" and then fails at runtime on every request. Enabling the
+ * OpenAI passthrough without an endpoint URL, for example, makes the proxy
+ * build a scheme-less upstream URL and return 502 for all /openai/v1/* traffic
+ * — with nothing in the deploy output to suggest anything was wrong.
+ */
+export function validateConfig(config: EnvironmentConfig, environmentName: string): void {
+  const errors: string[] = [];
+
+  // The Mantle-backed surfaces need an endpoint URL. Without it the proxy falls
+  // back to an empty base URL and every upstream call fails.
+  const needsMantleEndpoint = config.enableOpenaiCompat || config.enableOpenaiPassthrough;
+  if (needsMantleEndpoint && !config.openaiBaseUrl) {
+    const flags = [
+      config.enableOpenaiCompat && 'enableOpenaiCompat',
+      config.enableOpenaiPassthrough && 'enableOpenaiPassthrough',
+    ].filter(Boolean).join(' and ');
+    errors.push(
+      `${flags} is enabled but openaiBaseUrl is not set. Set it in the ` +
+      `'${environmentName}' block of cdk/config/config.ts (preferred, so the value ` +
+      `is version-controlled) or export MANTLE_ENDPOINT_URL for this deploy. ` +
+      `Deploying without it returns 502 on every request to those endpoints.`
+    );
+  }
+
+  // Both surfaces authenticate to Mantle with a bearer token.
+  const hasBedrockApiKey = Boolean(process.env.BEDROCK_API_KEY || process.env.OPENAI_API_KEY);
+  if (needsMantleEndpoint && !hasBedrockApiKey) {
+    errors.push(
+      `openaiCompat/openaiPassthrough is enabled but no Bedrock API key is available. ` +
+      `Export BEDROCK_API_KEY for this deploy. Without it the proxy sends ` +
+      `'Authorization: Bearer ' with an empty token and Mantle rejects every request.`
+    );
+  }
+
+  // A custom domain without its certificate (or vice versa) yields a
+  // distribution that cannot serve the intended hostname.
+  if (Boolean(config.cloudFrontDomainName) !== Boolean(config.cloudFrontCertificateArn)) {
+    errors.push(
+      `cloudFrontDomainName and cloudFrontCertificateArn must be set together ` +
+      `(domain=${config.cloudFrontDomainName ?? 'unset'}, ` +
+      `certArn=${config.cloudFrontCertificateArn ?? 'unset'}).`
+    );
+  }
+
+  // CloudFront only accepts certificates from us-east-1.
+  if (config.cloudFrontCertificateArn &&
+      !config.cloudFrontCertificateArn.startsWith('arn:aws:acm:us-east-1:')) {
+    errors.push(
+      `cloudFrontCertificateArn must be an ACM cert in us-east-1 (CloudFront ` +
+      `accepts certs from no other region). Got: ${config.cloudFrontCertificateArn}`
+    );
+  }
+
+  // The Mantle base URL must end in /v1, not /openai/v1. It is easy to conflate
+  // with the `/openai/v1/*` routes the proxy exposes to clients, but that is the
+  // inbound path — the upstream mounts its OpenAI surface at /v1. Getting this
+  // wrong yields "The model '<id>' does not support the '/openai/v1/responses'
+  // API" for every model, which looks like a model-availability problem and
+  // sends you hunting in the wrong place.
+  if (config.openaiBaseUrl) {
+    let url: URL | undefined;
+    try {
+      url = new URL(config.openaiBaseUrl);
+    } catch {
+      errors.push(`openaiBaseUrl is not a valid URL: ${config.openaiBaseUrl}`);
+    }
+    if (url) {
+      if (url.protocol !== 'https:') {
+        errors.push(
+          `openaiBaseUrl must use https. Got: ${config.openaiBaseUrl}`
+        );
+      }
+      // Mantle serves two disjoint base paths, and which one is correct depends
+      // on the model, not on configuration:
+      //   /openai/v1 -> the OpenAI GPT-5.x family
+      //   /v1        -> the open-weight gpt-oss models
+      // The proxy picks per request (see upstream_url in client.py), so this
+      // value only needs a valid /v1-suffixed path; do not "correct" one to the
+      // other here.
+      const trimmedPath = url.pathname.replace(/\/+$/, '');
+      if (!trimmedPath.endsWith('/v1')) {
+        errors.push(
+          `openaiBaseUrl should end in '/v1' or '/openai/v1' (the upstream ` +
+          `OpenAI-compatible base path). Got: ${config.openaiBaseUrl}`
+        );
+      }
+    }
+  }
+
+  // Web search needs a provider credential to call out to.
+  if (config.enableWebSearch && !config.webSearchApiKey) {
+    errors.push(
+      `enableWebSearch is true but webSearchApiKey is not set. Export ` +
+      `WEB_SEARCH_API_KEY for this deploy, or set enableWebSearch to false.`
+    );
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Invalid configuration for environment '${environmentName}':\n` +
+      errors.map((e) => `  - ${e}`).join('\n')
+    );
+  }
 }

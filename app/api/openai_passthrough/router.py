@@ -16,8 +16,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.api.openai_passthrough.chat_responses_adapter import (
     MAX_UNSUPPORTED_PARAM_RETRIES,
     chat_request_to_response_request,
+    clamp_reasoning_effort,
+    clamp_tool_choice,
+    downgrade_unsupported_tools,
+    normalize_message_content,
     pop_unsupported_parameter,
     response_to_chat_completion,
+    sanitize_input_items,
     stream_responses_as_chat_completions,
     strip_learned_unsupported_params,
 )
@@ -331,7 +336,11 @@ async def chat_completions(
     retries_left = MAX_UNSUPPORTED_PARAM_RETRIES
     while True:
         resp = await get_client().post(
-            upstream_url("/responses", base_url=base_url),
+            upstream_url(
+                "/responses",
+                base_url=base_url,
+                model=upstream_body.get("model"),
+            ),
             json=upstream_body,
             headers=upstream_headers(extra, api_key=api_key),
         )
@@ -380,6 +389,43 @@ async def responses_create(
     body = await request.json()
     mapping, _, context_store = _managers()
     body["model"] = resolve_model_id(body.get("model", ""), mapping)
+    # bedrock-mantle accepts only `function` and `mcp` tools; any other variant
+    # (custom, namespace, web_search, ...) rejects the whole request, taking
+    # every other tool with it. The Codex CLI sends both custom and namespace.
+    downgraded_tools = downgrade_unsupported_tools(body)
+    if downgraded_tools:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] rewrote unsupported tools as function tools: %s",
+            ", ".join(downgraded_tools),
+        )
+    # The replayed conversation history has the same problem: one item type
+    # mantle cannot deserialize rejects the whole request, and because the client
+    # keeps replaying that history the conversation stays broken from then on.
+    sanitized_input = sanitize_input_items(body)
+    if sanitized_input:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] adjusted unsupported input items: %s",
+            ", ".join(sanitized_input),
+        )
+    # Clients keep adding reasoning tiers above what mantle serves (Codex
+    # exposes ultra/max); an unknown value fails the whole request.
+    clamped_effort = clamp_reasoning_effort(body)
+    if clamped_effort:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] clamped reasoning effort: %s", clamped_effort
+        )
+    # Assistant turns must be plain strings and only input_text parts are
+    # accepted; clients replay both in the richer spec shape.
+    normalized_content = normalize_message_content(body)
+    if normalized_content:
+        logger.info(
+            "[OPENAI-PASSTHROUGH] normalized message content: %s",
+            ", ".join(sorted(set(normalized_content))),
+        )
+    # Mantle serves only tool_choice=auto.
+    clamped_choice = clamp_tool_choice(body)
+    if clamped_choice:
+        logger.info("[OPENAI-PASSTHROUGH] %s", clamped_choice)
     extra = _passthrough_extra_headers(request)
     base_url, api_key = _resolve_upstream_target(api_key_info)
     _info_log_upstream_request(
@@ -574,7 +620,7 @@ async def responses_create(
         )
 
     resp = await get_client().post(
-        upstream_url("/responses", base_url=base_url),
+        upstream_url("/responses", base_url=base_url, model=body.get("model")),
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
     )
@@ -620,7 +666,11 @@ async def _passthrough_request(
     )
     resp = await get_client().request(
         request.method,
-        upstream_url(path, base_url=base_url),
+        upstream_url(
+            path,
+            base_url=base_url,
+            model=body.get("model") if isinstance(body, dict) else None,
+        ),
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
     )

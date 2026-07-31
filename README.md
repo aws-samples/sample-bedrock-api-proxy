@@ -138,24 +138,51 @@ The same settings apply to Claude Agent SDK. See [AgentCore Demo](https://github
 | **Docker Access** | No | Yes (socket mount) |
 | **Recommended For** | Standard API proxy | PTC/Web Search dynamic filtering |
 
+**Prerequisites:** AWS CLI configured, Node.js, and Docker running (the image is
+built locally from your working tree).
+
 ```bash
 cd cdk && npm install
 
-# Fargate (ARM64)
+# One-time per account/region
+npx cdk bootstrap aws://<account-id>/<region>
+```
+
+**Optional — enable features that need a credential.** Shared settings live in
+`config/config.ts`; secrets belong in `cdk/.env.local`, which is gitignored and
+loaded automatically, so you don't re-export them on every deploy:
+
+```bash
+cp .env.local.example .env.local   # then fill in what you need
+```
+
+Skip this entirely if you only need the Anthropic `/v1/messages` surface — it
+authenticates with the task's IAM role and needs no extra credential.
+
+```bash
+# First deploy: --all creates the Network, DynamoDB, Cognito and ECS stacks
+./scripts/deploy.sh -e prod -r us-west-2 -p arm64 --all
+
+# Subsequent deploys: application stack only (the default)
 ./scripts/deploy.sh -e prod -r us-west-2 -p arm64
 
-# EC2 (enables PTC + dynamic filtering)
+# EC2 launch type (enables PTC + dynamic filtering)
 ./scripts/deploy.sh -e prod -r us-west-2 -p arm64 -l ec2
+```
 
-# With all features
-ENABLE_CLOUDFRONT=true \
-ENABLE_WEB_SEARCH=true \
-WEB_SEARCH_PROVIDER=tavily \
-WEB_SEARCH_API_KEY=tvly-your-key \
-ENABLE_OPENAI_COMPAT=true \
-BEDROCK_API_KEY=your-bedrock-key \
-MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-east-2.api.aws/openai/v1 \
-./scripts/deploy.sh -e prod -r us-west-2 -p arm64 -l ec2
+> After the first deploy, prefer the default (ECS-only). `--all` also deploys the
+> Network stack, which against a long-lived environment whose VPC has drifted
+> from this code can provision parallel NAT gateways and VPC endpoints and orphan
+> the live ones. Run `cdk diff` before any infrastructure change.
+
+Enabling a feature without its required configuration fails at synth with a
+message naming what's missing, rather than deploying a proxy that errors on every
+request. Feature flags such as `ENABLE_OPENAI_PASSTHROUGH` and
+`ENABLE_CLOUDFRONT` can go in `.env.local` alongside the secrets, or be exported
+for a single deploy:
+
+```bash
+ENABLE_CLOUDFRONT=true ./scripts/deploy.sh -e prod -r us-west-2 -p arm64
 ```
 
 Deployment takes ~15-20 minutes. See [CDK Deployment Guide](cdk/DEPLOYMENT.md) for full details. For AgentCore web search, run `AWS_REGION=us-east-1 uv run bash scripts/create_agentcore.sh` in `us-east-1`, then deploy with `WEB_SEARCH_PROVIDER=agentcore` and `AGENTCORE_GATEWAY_URL=<gateway-mcp-url>` instead of `WEB_SEARCH_API_KEY`.

@@ -116,6 +116,25 @@ export class NetworkStack extends cdk.Stack {
         ),
         privateDnsEnabled: true,
       });
+
+      // Secrets Manager endpoint — the ECS agent fetches MASTER_API_KEY from
+      // Secrets Manager at task launch. In a VPC without NAT egress, tasks
+      // cannot start without this endpoint.
+      this.vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
+        service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+        privateDnsEnabled: true,
+      });
+
+      // Cognito IDP endpoint — the admin portal validates Cognito JWTs by
+      // fetching JWKS from cognito-idp.<region>.amazonaws.com. Without egress
+      // that fetch hangs and every authenticated /api/* call stalls.
+      this.vpc.addInterfaceEndpoint('CognitoIdpEndpoint', {
+        service: new ec2.InterfaceVpcEndpointService(
+          `com.amazonaws.${config.region}.cognito-idp`,
+          443
+        ),
+        privateDnsEnabled: true,
+      });
     }
 
     // Apply tags

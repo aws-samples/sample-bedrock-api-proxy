@@ -40,7 +40,43 @@ def reset_client_for_testing() -> None:
         _client = None
 
 
-def upstream_url(path: str, base_url: str | None = None) -> str:
+# bedrock-mantle serves two disjoint base paths and the correct one depends on
+# the model, not on configuration:
+#   /openai/v1 -> the OpenAI GPT-5.x family (openai.gpt-5.4/5.5/5.6-*)
+#   /v1        -> the open-weight gpt-oss models (openai.gpt-oss-*)
+# Using the wrong one yields "The model '<id>' does not support the
+# '<path>/responses' API", which reads like a model-availability problem.
+_OPENAI_PATH_PREFIX = "/openai/v1"
+_PLAIN_PATH_PREFIX = "/v1"
+
+
+def _base_url_for_model(base: str, model: str | None) -> str:
+    """Swap the base URL's path prefix to the one this model is served on.
+
+    Only rewrites between the two known Mantle prefixes; any other base URL
+    (a custom provider endpoint, say) is returned unchanged.
+    """
+    if not model:
+        return base
+    for prefix in (_OPENAI_PATH_PREFIX, _PLAIN_PATH_PREFIX):
+        if not base.endswith(prefix):
+            continue
+        # gpt-oss is the open-weight family served from the plain /v1 path;
+        # everything else under the openai. namespace uses /openai/v1.
+        wanted = (
+            _PLAIN_PATH_PREFIX
+            if model.startswith("openai.gpt-oss")
+            else _OPENAI_PATH_PREFIX
+        )
+        if prefix == wanted:
+            return base
+        return base[: -len(prefix)] + wanted
+    return base
+
+
+def upstream_url(
+    path: str, base_url: str | None = None, model: str | None = None
+) -> str:
     """Build a full upstream URL by appending ``path`` to the Mantle endpoint.
 
     Avoids httpx's RFC 3986 path-replacement behaviour by always producing a
@@ -50,12 +86,18 @@ def upstream_url(path: str, base_url: str | None = None) -> str:
     honour a per-API-key provider's ``endpoint_url``. Falls back to the global
     default when ``None``.
 
+    ``model`` selects between Mantle's two base paths (see above). Omit it for
+    model-independent calls such as ``/models``.
+
     Examples:
-        MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-west-2.api.aws/v1
-        upstream_url("/chat/completions")  -> https://bedrock-mantle.us-west-2.api.aws/v1/chat/completions
-        upstream_url("models")             -> https://bedrock-mantle.us-west-2.api.aws/v1/models
+        MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-east-2.api.aws/openai/v1
+        upstream_url("/responses", model="openai.gpt-5.6-sol")
+            -> https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses
+        upstream_url("/responses", model="openai.gpt-oss-120b")
+            -> https://bedrock-mantle.us-east-2.api.aws/v1/responses
     """
     base = (base_url or settings.openai_base_url).rstrip("/")
+    base = _base_url_for_model(base, model)
     if not path.startswith("/"):
         path = "/" + path
     return base + path

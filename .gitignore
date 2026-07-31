@@ -10,6 +10,12 @@ wheels/
 # Virtual environments
 .venv
 .env
+# Deploy-time secrets. `.env` above does not cover these — gitignore patterns
+# match whole names, not prefixes. Keep the .example files tracked so the
+# required variables stay discoverable.
+.env.local
+.env.*.local
+!.env.local.example
 .pytest_cache
 .coverage
 htmlcov

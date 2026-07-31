@@ -18,6 +18,7 @@ PLATFORM="arm64"
 LAUNCH_TYPE="fargate"
 SKIP_BUILD=false
 DESTROY=false
+DEPLOY_ALL=false
 
 # Usage
 usage() {
@@ -34,6 +35,13 @@ OPTIONS:
                                - fargate: Serverless, no Docker access, lower cost
                                - ec2: EC2 instances, supports PTC (Docker socket)
     -s, --skip-build           Skip npm install and build
+    -a, --all                  Deploy ALL stacks including Network/DynamoDB/Cognito
+                               [default: deploy only the -ECS application stack]
+                               Only needed for first-time bootstrap or a
+                               deliberate infrastructure change. Run 'cdk diff'
+                               first — on an environment whose VPC has drifted
+                               from this code, deploying the Network stack can
+                               orphan live NAT gateways and VPC endpoints.
     -d, --destroy              Destroy the stack instead of deploying
     -h, --help                 Show this help message
 
@@ -106,6 +114,48 @@ EOF
     exit 1
 }
 
+# Load deploy-time secrets from cdk/.env.local (gitignored) if present.
+#
+# Only secrets belong there; shared configuration lives in config/config.ts so
+# it cannot differ silently between machines.
+#
+# Values already present in the environment take precedence, so a one-off
+# `BEDROCK_API_KEY=... ./deploy.sh` still overrides the file. That is why this
+# assigns each key individually instead of `set -a; . file` — sourcing would
+# clobber an explicit override with the file's value.
+# CDK_ENV_LOCAL_FILE overrides the path (tests point it at /dev/null so they do
+# not depend on whether the developer happens to have a .env.local).
+ENV_LOCAL="${CDK_ENV_LOCAL_FILE:-$(dirname "$0")/../.env.local}"
+if [ -f "$ENV_LOCAL" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;          # blank or comment
+            *=*) ;;
+            *) continue ;;                # not an assignment
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        # Trim with parameter expansion only — this must work before PATH is
+        # usable, so no sed/tr/awk here.
+        while case "$key" in [[:space:]]*) true ;; *) false ;; esac; do key="${key# }"; key="${key#	}"; done
+        while case "$key" in *[[:space:]]) true ;; *) false ;; esac; do key="${key% }"; key="${key%	}"; done
+        while case "$value" in [[:space:]]*) true ;; *) false ;; esac; do value="${value# }"; value="${value#	}"; done
+        while case "$value" in *[[:space:]]) true ;; *) false ;; esac; do value="${value% }"; value="${value%	}"; done
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+        [ -n "$key" ] || continue
+        [ -n "$value" ] || continue       # skip placeholders like `KEY=`
+        # Only set it if not already provided in the environment, so an explicit
+        # `KEY=... ./deploy.sh` still wins.
+        if [ -z "$(eval "printf '%s' \"\${$key:-}\"")" ]; then
+            export "$key=$value"
+        fi
+    done < "$ENV_LOCAL"
+    echo -e "${GREEN}✓ Loaded deploy secrets from ${ENV_LOCAL##*/}${NC}"
+fi
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -127,6 +177,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -s|--skip-build)
             SKIP_BUILD=true
+            shift
+            ;;
+        -a|--all)
+            DEPLOY_ALL=true
             shift
             ;;
         -d|--destroy)
@@ -167,8 +221,29 @@ if [[ ! "$LAUNCH_TYPE" =~ ^(fargate|ec2)$ ]]; then
 fi
 
 # Validate Bedrock Mantle credentials for new deployments.
-if [[ "$DESTROY" != true && "${ENABLE_OPENAI_COMPAT,,}" == "true" && -z "${BEDROCK_API_KEY:-}" ]]; then
-    echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true.${NC}"
+#
+# Implementation notes — this guard must work before PATH is usable:
+#   - `${VAR,,}` (lowercase expansion) is bash 4+ only and aborts with "bad
+#     substitution" on the bash 3.2 that ships with macOS.
+#   - External tools (tr, awk, ...) are unavailable if PATH is not yet set up.
+# So match case-insensitively with a bash 3.2 builtin pattern instead.
+#
+# The authoritative checks live in getConfig() in cdk/config/config.ts, which
+# runs for every synth/diff/deploy; this is an early, friendlier duplicate.
+is_true() {
+    case "$1" in
+        [Tt][Rr][Uu][Ee]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if [[ "$DESTROY" != true && -z "${BEDROCK_API_KEY:-}" ]] \
+   && { is_true "${ENABLE_OPENAI_COMPAT:-}" || is_true "${ENABLE_OPENAI_PASSTHROUGH:-}"; }; then
+    if is_true "${ENABLE_OPENAI_COMPAT:-}"; then
+        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true.${NC}"
+    else
+        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_PASSTHROUGH=true.${NC}"
+    fi
     if [[ -n "${OPENAI_API_KEY:-}" ]]; then
         echo -e "${YELLOW}OPENAI_API_KEY is deprecated for Bedrock Mantle. Use BEDROCK_API_KEY instead.${NC}"
     fi
@@ -283,6 +358,9 @@ export CDK_ENVIRONMENT="$ENVIRONMENT"
 export CDK_PLATFORM="$PLATFORM"
 export CDK_LAUNCH_TYPE="$LAUNCH_TYPE"
 
+# Must match stackPrefix in bin/app.ts
+STACK_PREFIX="AnthropicProxy-${ENVIRONMENT}"
+
 # Clean cdk.out directory to prevent ENAMETOOLONG errors
 echo -e "${YELLOW}Cleaning previous CDK output...${NC}"
 rm -rf cdk.out
@@ -309,8 +387,27 @@ else
     npx cdk synth -c environment="$ENVIRONMENT"
     echo -e "${GREEN}✓ Synthesis complete${NC}"
 
-    echo -e "${YELLOW}Deploying stacks...${NC}"
-    npx cdk deploy --all -c environment="$ENVIRONMENT" --require-approval never
+    if [ "$DEPLOY_ALL" = true ]; then
+        echo -e "${YELLOW}Deploying ALL stacks (--all)...${NC}"
+        npx cdk deploy --all -c environment="$ENVIRONMENT" --require-approval never
+    else
+        # Default: deploy only the application stack.
+        #
+        # `--all` would also deploy the Network stack. That is unsafe against a
+        # long-lived environment whose VPC has drifted from this code (manually
+        # created NAT gateways, VPC endpoints, or a subnet layout that no longer
+        # matches maxAzs): CDK would provision parallel resources and orphan the
+        # live ones, taking egress down with it.
+        #
+        # The application stack is what a code deploy needs. Use --all only for
+        # a first-time bootstrap or a deliberate, reviewed network change, and
+        # run `cdk diff` first.
+        echo -e "${YELLOW}Deploying ${STACK_PREFIX}-ECS only (application stack)...${NC}"
+        echo -e "${BLUE}  Network/DynamoDB/Cognito stacks are NOT touched.${NC}"
+        echo -e "${BLUE}  Use --all if you intend to deploy infrastructure too.${NC}"
+        npx cdk deploy "${STACK_PREFIX}-ECS" --exclusively \
+            -c environment="$ENVIRONMENT" --require-approval never
+    fi
 
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Deployment Complete!${NC}"
