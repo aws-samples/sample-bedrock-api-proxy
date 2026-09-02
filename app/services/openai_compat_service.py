@@ -125,7 +125,9 @@ class OpenAICompatService:
         )
         print(f"  - Has tools: {bool(openai_request.get('tools'))}")
         print(f"  - Tools count: {len(openai_request.get('tools', []))}")
-        print(f"  - max_tokens: {openai_request.get('max_tokens')}")
+        print(
+            f"  - max_completion_tokens: {openai_request.get('max_completion_tokens')}"
+        )
         print(f"  - temperature: {openai_request.get('temperature', 'N/A')}")
         print(f"  - top_p: {openai_request.get('top_p', 'N/A')}")
         print(f"  - stop: {openai_request.get('stop', 'N/A')}")
@@ -507,7 +509,9 @@ class OpenAICompatService:
             )
             print(f"  - Has tools: {bool(openai_request.get('tools'))}")
             print(f"  - Tools count: {len(openai_request.get('tools', []))}")
-            print(f"  - max_tokens: {openai_request.get('max_tokens')}")
+            print(
+                f"  - max_completion_tokens: {openai_request.get('max_completion_tokens')}"
+            )
             print(f"  - temperature: {openai_request.get('temperature', 'N/A')}")
             print(f"  - top_p: {openai_request.get('top_p', 'N/A')}")
             print(f"  - stop: {openai_request.get('stop', 'N/A')}")

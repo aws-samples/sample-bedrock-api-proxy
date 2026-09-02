@@ -48,6 +48,11 @@ the catch-all and add a router-order test
 
 ## Required Patterns
 
+- OpenAI-compat Chat Completions requests (`AnthropicToOpenAIConverter`) send
+  `max_completion_tokens`, never `max_tokens`: OpenAI deprecated the latter and gpt-5.6 on
+  Bedrock Mantle rejects it with 400 `unsupported_parameter` (verified 2026-09-02; the new key
+  is accepted by gpt-5.4, grok-4.3, kimi-k2.5, glm-5, minimax-m2.5, gpt-oss). Responses API
+  keeps `max_output_tokens`.
 - Admin backend calls the proxy over HTTP (`settings.proxy_base_url`) with a provisioned API
   key; it never calls Bedrock directly and never re-implements routing.
 - Long-running external calls in async routes: `httpx.AsyncClient` + `asyncio.timeout(...)`;

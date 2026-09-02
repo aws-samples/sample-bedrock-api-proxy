@@ -68,7 +68,10 @@ class AnthropicToOpenAIConverter:
         """
         result: Dict[str, Any] = {
             "model": request.model,
-            "max_tokens": request.max_tokens,
+            # OpenAI deprecated ``max_tokens``; gpt-5.6 on Bedrock Mantle rejects it
+            # (400 unsupported_parameter). ``max_completion_tokens`` is accepted by
+            # every model reachable through this path.
+            "max_completion_tokens": request.max_tokens,
         }
 
         # Build messages list
