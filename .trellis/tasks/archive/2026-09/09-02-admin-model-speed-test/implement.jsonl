@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Feature spans admin API, service, DynamoDB, CDK and React; check data contracts at every boundary (record shape, env names, table wiring)."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse UsageHoverChart popover logic, existing ApiKeyManager and DynamoDB table wiring patterns instead of new helpers."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend conventions index for admin_portal/backend and app/ changes."}
+{"file": ".trellis/tasks/09-02-admin-model-speed-test/research/codebase-evidence.md", "reason": "Verified file:line anchors for every touch point (proxy SSE events, thinking handling, table wiring checklist, frontend patterns)."}
