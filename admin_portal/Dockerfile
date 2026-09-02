@@ -62,6 +62,10 @@ COPY --from=builder /build/pyproject.toml /build/uv.lock /build/README.md /app/
 # Copy main app module (needed for DynamoDB client imports)
 COPY --from=builder /build/app /app/app
 
+# Offline model-mapping snapshot (git submodule; run `git submodule update --init`
+# before building). Seeds the default mapping until the remote sync succeeds.
+COPY model-mappings/model_mappings.json /app/model-mappings/model_mappings.json
+
 # Copy admin_portal backend
 COPY --from=builder /build/admin_portal/backend /app/admin_portal/backend
 

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { modelMappingApi } from '../services/api';
-import type { ModelMappingCreate, ModelMappingUpdate } from '../types';
+import type { ModelMappingCreate, ModelMappingUpdate, ModelMappingSyncRequest } from '../types';
 
 export function useModelMappings(params?: { search?: string }) {
   return useQuery({
@@ -47,6 +47,25 @@ export function useDeleteModelMapping() {
     mutationFn: (anthropicModelId: string) => modelMappingApi.delete(anthropicModelId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['modelMappings'] });
+    },
+  });
+}
+
+export function useModelMappingSyncStatus() {
+  return useQuery({
+    queryKey: ['modelMappingSyncStatus'],
+    queryFn: () => modelMappingApi.syncStatus(),
+  });
+}
+
+export function useSyncModelMappings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data?: ModelMappingSyncRequest) => modelMappingApi.sync(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['modelMappings'] });
+      queryClient.invalidateQueries({ queryKey: ['modelMappingSyncStatus'] });
     },
   });
 }

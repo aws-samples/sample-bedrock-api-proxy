@@ -248,7 +248,7 @@
     "bedrockModelId": "Bedrock 模型 ID",
     "source": "来源",
     "sources": {
-      "default": "默认",
+      "default": "默认（远程）",
       "custom": "自定义",
       "override": "已覆盖"
     },
@@ -268,7 +268,23 @@
     "mappingDeleted": "模型映射删除成功",
     "defaultValue": "默认值",
     "restoreDefault": "恢复默认",
-    "confirmRestoreDefault": "确定要移除此覆盖并恢复默认映射吗？"
+    "confirmRestoreDefault": "确定要移除此覆盖并恢复默认映射吗？",
+    "sync": {
+      "syncNow": "刷新默认映射",
+      "syncing": "刷新中...",
+      "tooltip": "从远程 model_mappings.json 拉取最新的默认映射",
+      "disabledTooltip": "远程同步已关闭（MODEL_MAPPING_SYNC_ENABLED=False）",
+      "completed": "默认映射已刷新",
+      "summary": "远程 {{remote}} 条，当前生效 {{active}} 条：新增 {{added}}，移除 {{removed}}，变更 {{changed}}。",
+      "localOverrides": "另有 {{count}} 条来自 DEFAULT_MODEL_MAPPING 环境变量，叠加在远程文件之上。",
+      "failed": "刷新失败，仍沿用之前的默认映射",
+      "lastError": "上次刷新失败：{{error}}",
+      "sourceLabel": {
+        "remote": "{{count}} 条默认映射来自远程文件",
+        "bundled": "{{count}} 条默认映射来自本地快照（尚未拉取远程）",
+        "env": "{{count}} 条默认映射来自 DEFAULT_MODEL_MAPPING + 本地快照"
+      }
+    }
   },
   "betaHeaders": {
     "title": "Beta Headers",

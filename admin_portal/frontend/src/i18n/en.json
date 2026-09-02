@@ -248,7 +248,7 @@
     "bedrockModelId": "Bedrock Model ID",
     "source": "Source",
     "sources": {
-      "default": "Default",
+      "default": "Default (remote)",
       "custom": "Custom",
       "override": "Overridden"
     },
@@ -268,7 +268,23 @@
     "mappingDeleted": "Model mapping deleted successfully",
     "defaultValue": "Default",
     "restoreDefault": "Restore Default",
-    "confirmRestoreDefault": "Remove this override and restore the default mapping?"
+    "confirmRestoreDefault": "Remove this override and restore the default mapping?",
+    "sync": {
+      "syncNow": "Refresh defaults",
+      "syncing": "Refreshing...",
+      "tooltip": "Pull the latest default mappings from the remote model_mappings.json",
+      "disabledTooltip": "Remote sync is disabled (MODEL_MAPPING_SYNC_ENABLED=False)",
+      "completed": "Default mappings refreshed",
+      "summary": "{{remote}} remote mappings, {{active}} active: {{added}} added, {{removed}} removed, {{changed}} changed.",
+      "localOverrides": "{{count}} entries from DEFAULT_MODEL_MAPPING are layered on top of the remote file.",
+      "failed": "Refresh failed — the previous default mappings are still in effect",
+      "lastError": "last refresh failed: {{error}}",
+      "sourceLabel": {
+        "remote": "{{count}} default mappings from the remote file",
+        "bundled": "{{count}} default mappings from the local snapshot (remote not fetched yet)",
+        "env": "{{count}} default mappings from DEFAULT_MODEL_MAPPING + local snapshot"
+      }
+    }
   },
   "betaHeaders": {
     "title": "Beta Headers",

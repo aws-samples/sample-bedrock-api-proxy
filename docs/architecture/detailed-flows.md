@@ -48,9 +48,10 @@ SSE format: `event: <type>\ndata: <json>\n\n`
 
 ## Model ID Mapping
 
-Configured in `app/core/config.py`:
-- Anthropic model IDs (e.g., `claude-3-5-sonnet-20241022`) → Bedrock ARNs (e.g., `anthropic.claude-3-5-sonnet-20241022-v2:0`)
-- Custom mappings stored in DynamoDB `model-mapping` table
+- Default mappings are pulled from the remote `model_mappings.json` in the [`bedrock-api-proxy-model-mappings`](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo by `app/services/model_mapping_sync_service.py` (startup + periodic refresh); the `model-mappings/` git submodule is the offline snapshot. See [features.md → Remote Default Model Mapping Sync](features.md#remote-default-model-mapping-sync).
+- Anthropic model IDs (e.g., `claude-sonnet-4-5-20250929`) → Bedrock ARNs (e.g., `global.anthropic.claude-sonnet-4-5-20250929-v1:0`)
+- `DEFAULT_MODEL_MAPPING` env entries are layered on top of the remote defaults
+- Custom mappings stored in DynamoDB `model-mapping` table take priority
 - Falls back to treating unknown IDs as valid Bedrock ARNs
 
 ## DynamoDB Schema

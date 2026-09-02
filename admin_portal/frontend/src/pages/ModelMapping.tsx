@@ -5,8 +5,10 @@ import {
   useCreateModelMapping,
   useUpdateModelMapping,
   useDeleteModelMapping,
+  useModelMappingSyncStatus,
+  useSyncModelMappings,
 } from '../hooks/useModelMapping';
-import type { ModelMapping, ModelMappingCreate } from '../types';
+import type { ModelMapping, ModelMappingCreate, ModelMappingSyncResult } from '../types';
 
 // Slide-over Panel Component
 function SlideOver({
@@ -45,10 +47,26 @@ export default function ModelMappingPage() {
   const [editingMapping, setEditingMapping] = useState<ModelMapping | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ModelMapping | null>(null);
 
+  const [syncResult, setSyncResult] = useState<ModelMappingSyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   const { data, isLoading, error } = useModelMappings();
+  const { data: syncStatus } = useModelMappingSyncStatus();
   const createMutation = useCreateModelMapping();
   const updateMutation = useUpdateModelMapping();
   const deleteMutation = useDeleteModelMapping();
+  const syncMutation = useSyncModelMappings();
+
+  const handleSync = async () => {
+    setSyncResult(null);
+    setSyncError(null);
+    try {
+      const result = await syncMutation.mutateAsync(undefined);
+      setSyncResult(result);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   // Filter items based on search
   const filteredItems = useMemo(() => {
@@ -110,15 +128,111 @@ export default function ModelMappingPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">{t('modelMapping.title')}</h1>
           <p className="text-slate-400 mt-1">{t('modelMapping.subtitle')}</p>
+          {syncStatus && (
+            <p className="text-xs text-slate-500 mt-2 break-all">
+              {t(`modelMapping.sync.sourceLabel.${syncStatus.source}`, {
+                count: syncStatus.mapping_count,
+              })}
+              {syncStatus.source === 'remote' && (
+                <>
+                  {' · '}
+                  <a
+                    href={syncStatus.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-slate-300"
+                  >
+                    {syncStatus.source_url}
+                  </a>
+                </>
+              )}
+              {syncStatus.last_error && (
+                <span className="text-amber-400">
+                  {' · '}
+                  {t('modelMapping.sync.lastError', { error: syncStatus.last_error })}
+                </span>
+              )}
+            </p>
+          )}
         </div>
-        <button
-          onClick={() => setShowCreatePanel(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-lg font-medium transition-colors shadow-lg shadow-blue-500/30"
-        >
-          <span className="material-symbols-outlined text-[20px]">add</span>
-          {t('modelMapping.addMapping')}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSync}
+            disabled={syncMutation.isPending || syncStatus?.enabled === false}
+            className="flex items-center gap-2 px-4 py-2.5 bg-surface-dark border border-border-dark text-slate-200 rounded-lg font-medium transition-colors hover:bg-border-dark disabled:opacity-50"
+            title={
+              syncStatus?.enabled === false
+                ? t('modelMapping.sync.disabledTooltip')
+                : t('modelMapping.sync.tooltip')
+            }
+          >
+            <span
+              className={`material-symbols-outlined text-[20px] ${
+                syncMutation.isPending ? 'animate-spin' : ''
+              }`}
+            >
+              sync
+            </span>
+            {syncMutation.isPending ? t('modelMapping.sync.syncing') : t('modelMapping.sync.syncNow')}
+          </button>
+          <button
+            onClick={() => setShowCreatePanel(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-lg font-medium transition-colors shadow-lg shadow-blue-500/30"
+          >
+            <span className="material-symbols-outlined text-[20px]">add</span>
+            {t('modelMapping.addMapping')}
+          </button>
+        </div>
       </div>
+
+      {/* Sync Result Banner */}
+      {syncResult && (
+        <div className="bg-emerald-900/20 border border-emerald-700/50 rounded-xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-emerald-400 mt-0.5">check_circle</span>
+            <div className="text-sm text-slate-300">
+              <p className="font-medium text-emerald-300 mb-1">{t('modelMapping.sync.completed')}</p>
+              <p>
+                {t('modelMapping.sync.summary', {
+                  remote: syncResult.remote_models,
+                  active: syncResult.mapping_count,
+                  added: syncResult.added.length,
+                  removed: syncResult.removed.length,
+                  changed: syncResult.changed.length,
+                })}
+              </p>
+              {syncResult.local_overrides > 0 && (
+                <p className="text-slate-400 mt-1">
+                  {t('modelMapping.sync.localOverrides', { count: syncResult.local_overrides })}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => setSyncResult(null)}
+            className="text-slate-400 hover:text-slate-300 flex-shrink-0"
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+      )}
+      {syncError && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-red-400 mt-0.5">error</span>
+            <div className="text-sm text-slate-300">
+              <p className="font-medium text-red-300 mb-1">{t('modelMapping.sync.failed')}</p>
+              <p className="break-all">{syncError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSyncError(null)}
+            className="text-slate-400 hover:text-slate-300 flex-shrink-0"
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">

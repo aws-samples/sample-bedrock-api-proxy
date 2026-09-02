@@ -34,6 +34,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.db.dynamodb import DynamoDBClient, ModelMappingManager
 from app.core.config import settings
+from app.services.model_mapping_sync_service import get_sync_status, run_sync
+
+
+def refresh_default_mapping():
+    """Best-effort pull of the remote default mapping so listings match a running proxy."""
+    if not settings.model_mapping_sync_enabled:
+        return
+    try:
+        run_sync()
+    except Exception as e:
+        print(f"⚠ Could not fetch remote model mappings ({e}); using local snapshot.")
 
 
 def add_mapping(anthropic_id: str, bedrock_id: str):
@@ -58,8 +69,15 @@ def list_mappings():
     print("MODEL MAPPINGS")
     print("="*80)
 
-    # Show default mappings from config
-    print("\n📋 Default Mappings (from config):")
+    # Show default mappings (remote model_mappings.json, or the local snapshot)
+    refresh_default_mapping()
+    status = get_sync_status()
+    origin = {
+        "remote": f"remote: {status['source_url']}",
+        "env": "DEFAULT_MODEL_MAPPING env + local snapshot",
+        "bundled": "local snapshot: model-mappings/model_mappings.json",
+    }[status["source"]]
+    print(f"\n📋 Default Mappings ({origin}):")
     print("-" * 80)
     for anthropic_id, bedrock_id in settings.default_model_mapping.items():
         print(f"  {anthropic_id:<40} → {bedrock_id}")

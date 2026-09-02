@@ -4,11 +4,43 @@ This guide explains how to add and manage model ID mappings between Anthropic's 
 
 ## Overview
 
-The proxy service translates Anthropic model IDs (like `claude-sonnet-4-5-20250929`) to Bedrock model ARNs (like `global.anthropic.claude-sonnet-4-5-20250929-v1:0`). There are three levels of model mapping:
+The proxy service translates Anthropic model IDs (like `claude-sonnet-4-5-20250929`) to Bedrock model ARNs (like `global.anthropic.claude-sonnet-4-5-20250929-v1:0`). There are four levels of model mapping:
 
-1. **Default mappings** - Built into the code (`app/core/config.py`)
-2. **Custom mappings** - Stored in DynamoDB (highest priority)
-3. **Pass-through** - If no mapping found, the ID is used as-is
+1. **Custom mappings** - Stored in DynamoDB (highest priority; managed via the admin portal / scripts)
+2. **Local additions** - `DEFAULT_MODEL_MAPPING` env var (JSON), layered on top of the remote defaults
+3. **Default mappings** - Pulled from the remote [`bedrock-api-proxy-model-mappings`](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo (`model_mappings.json`) at startup and refreshed periodically. The same repo is checked out as the `model-mappings/` git submodule and serves as the offline snapshot until the first fetch succeeds.
+4. **Pass-through** - If no mapping found, the ID is used as-is
+
+### Remote default mappings (`model_mappings.json`)
+
+Default mappings are **not** hard-coded in `app/core/config.py` anymore. `app/services/model_mapping_sync_service.py` fetches
+`MODEL_MAPPING_SYNC_URL` (default: the raw `main` branch file of the repo above) when the proxy and the admin portal start, then every
+`MODEL_MAPPING_SYNC_INTERVAL_SECONDS` (default 3600). Adding a model to that repo rolls out to every deployment without a redeploy.
+
+```json
+{
+  "schema_version": 1,
+  "mappings": {
+    "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "gpt-5.5": "openai.gpt-5.5"
+  }
+}
+```
+
+Safety: an unreachable URL, invalid JSON, non-string entries or an empty `mappings` object never clear the active mapping — the previous
+mapping (or the submodule snapshot on a fresh start) stays in effect and the error shows up in `GET /api/model-mapping/sync/status`
+and the admin portal's Model Mapping page.
+
+```bash
+MODEL_MAPPING_SYNC_ENABLED=True          # False → only the submodule snapshot + DEFAULT_MODEL_MAPPING are used
+MODEL_MAPPING_SYNC_URL=https://raw.githubusercontent.com/xiehust/bedrock-api-proxy-model-mappings/main/model_mappings.json
+MODEL_MAPPING_SYNC_INTERVAL_SECONDS=3600
+MODEL_MAPPING_SYNC_TIMEOUT_SECONDS=15
+```
+
+Manual refresh: admin portal → Model Mapping → **Refresh defaults**, `POST /api/model-mapping/sync` (`{"dry_run": true}` to preview), or
+`uv run python scripts/sync_model_mappings.py` (`--validate model-mappings/model_mappings.json` to check a local edit before pushing).
+Each proxy worker refreshes on its own schedule; a manual refresh in the admin portal only updates the portal process.
 
 ## Methods to Add Model Mappings
 
@@ -74,35 +106,35 @@ for mapping in mappings:
 mapping_manager.delete_mapping("claude-3-5-sonnet-20241022")
 ```
 
-### Method 3: Update Default Mappings in Code
+### Method 3: Update the Remote Default Mappings
 
-For permanent default mappings, edit `app/core/config.py`:
+For defaults that should apply to every deployment, edit `model_mappings.json` in the
+[`bedrock-api-proxy-model-mappings`](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo. Working from the submodule:
 
-```python
-# In app/core/config.py
-default_model_mapping: Dict[str, str] = Field(
-    default={
-        # Add your new mapping here
-        "claude-3-5-sonnet-20241022": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "claude-3-opus-20240229": "anthropic.claude-3-opus-20240229-v1:0",
-        # ... other mappings
-    },
-    alias="DEFAULT_MODEL_MAPPING",
-)
+```bash
+cd model-mappings
+# add the entry to model_mappings.json (keep it valid JSON: no comments, no trailing commas)
+uv run python ../scripts/sync_model_mappings.py --validate model_mappings.json
+git commit -am "Add claude-xyz mapping" && git push origin main
+
+# then pin the new snapshot in the proxy repo (optional but recommended)
+cd .. && git add model-mappings && git commit -m "chore: bump model-mappings snapshot"
 ```
 
-**Note:** This requires restarting the service.
+Running proxies pick the change up within `MODEL_MAPPING_SYNC_INTERVAL_SECONDS` (or immediately via **Refresh defaults** /
+`POST /api/model-mapping/sync`); no restart or redeploy is needed. The submodule pin only matters for the offline fallback.
 
 ### Method 4: Environment Variable (JSON)
 
-You can override default mappings via environment variable:
+Per-deployment additions/overrides that should not go into the shared remote file:
 
 ```bash
 # In .env file
 DEFAULT_MODEL_MAPPING='{"claude-3-5-sonnet-20241022":"anthropic.claude-3-5-sonnet-20241022-v2:0"}'
 ```
 
-**Note:** This replaces ALL default mappings, so include all models you need.
+**Note:** With remote sync enabled these entries are layered **on top of** the remote defaults on every refresh (they win on key
+conflicts). With `MODEL_MAPPING_SYNC_ENABLED=False` they replace the submodule snapshot entirely, so include all models you need.
 
 ### Method 5: Direct DynamoDB Access
 
@@ -124,7 +156,7 @@ aws dynamodb put-item \
 The service resolves model IDs in this order:
 
 1. **Custom DynamoDB mapping** (highest priority)
-2. **Default config mapping**
+2. **Default mapping** — remote `model_mappings.json` with `DEFAULT_MODEL_MAPPING` env entries layered on top (submodule snapshot until the first fetch)
 3. **Pass-through** (use the ID as-is, assuming it's a valid Bedrock ARN)
 
 ### Example Resolution Flow
@@ -134,7 +166,7 @@ Request: "claude-3-5-sonnet-20241022"
     ↓
 Check DynamoDB custom mappings
     ↓ (not found)
-Check default config mappings
+Check default mappings (remote model_mappings.json + env)
     ↓ (found!)
 Use: "anthropic.claude-3-5-sonnet-20241022-v2:0"
 ```
@@ -245,7 +277,7 @@ The service will use it as-is if no mapping is found.
 2. **Document custom mappings** - Keep track of why custom mappings were added
 3. **Test resolution before deploying** - Use the test command to verify mappings
 4. **Use pass-through for ad-hoc testing** - Directly use Bedrock ARNs when experimenting
-5. **Keep default mappings updated** - Update `config.py` when new models are released
+5. **Keep default mappings updated** - Add new models to the `bedrock-api-proxy-model-mappings` repo when they are released; every deployment picks them up on the next refresh
 
 ## Examples
 

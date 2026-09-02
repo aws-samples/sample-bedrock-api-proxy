@@ -29,6 +29,7 @@ tests/captures/
 tests/input.log.json
 # Git
 .git/
+model-mappings/.git
 .gitignore
 .gitattributes
 

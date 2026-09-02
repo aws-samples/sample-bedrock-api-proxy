@@ -1,4 +1,5 @@
 """Model Mapping management routes."""
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -6,15 +7,20 @@ from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.db.dynamodb import DynamoDBClient, ModelMappingManager
 from app.core.config import settings
+from app.services.model_mapping_sync_service import get_sync_status, run_sync
 from admin_portal.backend.schemas.model_mapping import (
     ModelMappingCreate,
     ModelMappingUpdate,
     ModelMappingResponse,
     ModelMappingListResponse,
+    ModelMappingSyncRequest,
+    ModelMappingSyncResponse,
+    ModelMappingSyncStatus,
 )
 
 router = APIRouter()
@@ -33,7 +39,8 @@ async def list_model_mappings(
     """
     List all model mappings (default + custom).
 
-    Default mappings come from config.py, custom mappings from DynamoDB.
+    Default mappings come from the remote model_mappings.json (synced
+    in-process, see MODEL_MAPPING_SYNC_URL); custom mappings from DynamoDB.
     If same anthropic_model_id exists in both, custom takes priority.
     """
     mapping_manager = get_manager()
@@ -80,6 +87,36 @@ async def list_model_mappings(
     items.sort(key=lambda x: (1 if x.source == "custom" else 0, x.anthropic_model_id))
 
     return ModelMappingListResponse(items=items, count=len(items))
+
+
+@router.get("/sync/status", response_model=ModelMappingSyncStatus)
+async def model_mapping_sync_status():
+    """Where the active default mapping came from and how the last refresh went."""
+    return ModelMappingSyncStatus(**get_sync_status())
+
+
+@router.post("/sync", response_model=ModelMappingSyncResponse)
+async def sync_model_mappings(request: Optional[ModelMappingSyncRequest] = None):
+    """
+    Refresh default model mappings from the remote file (manual trigger).
+
+    Replaces the in-process default mapping of *this* admin portal process;
+    proxy workers refresh on their own schedule (MODEL_MAPPING_SYNC_INTERVAL_SECONDS).
+    Use dry_run to preview changes.
+    """
+    request = request or ModelMappingSyncRequest()
+    try:
+        summary = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: run_sync(url=request.url, dry_run=request.dry_run)
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch model mapping source: {e}",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    return ModelMappingSyncResponse(**summary)
 
 
 @router.get("/{anthropic_model_id:path}", response_model=ModelMappingResponse)
@@ -171,8 +208,9 @@ async def update_model_mapping(anthropic_model_id: str, request: ModelMappingUpd
     Update a model mapping.
 
     Updating a custom mapping changes it in place. Updating a default
-    mapping writes a DynamoDB override (the default itself is config-defined
-    and stays intact; delete the override to restore it).
+    mapping writes a DynamoDB override (the default itself comes from the
+    remote model_mappings.json and stays intact; delete the override to
+    restore it).
     """
     anthropic_model_id = unquote(anthropic_model_id)
     mapping_manager = get_manager()
@@ -216,8 +254,8 @@ async def delete_model_mapping(anthropic_model_id: str):
     """
     Delete a custom model mapping or override.
 
-    Deleting an override restores the config-defined default. Defaults
-    themselves cannot be deleted (they're defined in config.py / env).
+    Deleting an override restores the remote-defined default. Defaults
+    themselves cannot be deleted here (edit the model-mappings repo instead).
     """
     anthropic_model_id = unquote(anthropic_model_id)
     mapping_manager = get_manager()
@@ -229,8 +267,8 @@ async def delete_model_mapping(anthropic_model_id: str):
         if anthropic_model_id in settings.default_model_mapping:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete default mapping (defined in config). "
-                       "You can override it with PUT instead.",
+                detail="Cannot delete default mapping (defined in the remote "
+                       "model_mappings.json). You can override it with PUT instead.",
             )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
