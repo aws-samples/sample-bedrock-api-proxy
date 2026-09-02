@@ -176,6 +176,7 @@ class Settings(BaseSettings):
     default_model_mapping: Dict[str, str] = Field(
         default={
             # Anthropic model IDs -> Bedrock model ARNs
+            "claude-fable-5-1": "global.anthropic.claude-fable-5-1",
             "claude-fable-5": "global.anthropic.claude-fable-5",
             "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
             "claude-opus-5": "global.anthropic.claude-opus-5",
@@ -191,6 +192,9 @@ class Settings(BaseSettings):
             # 1M-context aliases — same Bedrock target; the 1M window is
             # activated by the `anthropic-beta: context-1m-2025-08-07` header
             # that clients (e.g. Claude Code) attach to the request.
+            "claude-fable-5-1-us": "us.anthropic.claude-fable-5-1",
+            "claude-fable-5-1-us[1m]": "us.anthropic.claude-fable-5-1",
+            "claude-fable-5-1[1m]": "global.anthropic.claude-fable-5-1",
             "claude-fable-5-us": "us.anthropic.claude-fable-5",
             "claude-fable-5-us[1m]": "us.anthropic.claude-fable-5",
             "claude-fable-5[1m]": "global.anthropic.claude-fable-5",
