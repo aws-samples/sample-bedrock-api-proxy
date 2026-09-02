@@ -97,3 +97,21 @@ export function formatCacheHitRate(rate: number | null, decimals: number = 1): s
   if (rate === null) return '—';
   return `${rate.toFixed(decimals)}%`;
 }
+
+/**
+ * Format a latency in milliseconds for the speed-test column, e.g. "812 ms".
+ * Returns an em dash when the value is missing.
+ */
+export function formatLatencyMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
+  return `${Math.round(ms).toLocaleString()} ms`;
+}
+
+/**
+ * Format an output-tokens-per-second value, e.g. "48.3 tok/s".
+ * Returns an em dash when the value is missing.
+ */
+export function formatTokensPerSecond(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(1)} tok/s`;
+}

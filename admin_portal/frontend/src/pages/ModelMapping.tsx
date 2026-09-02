@@ -7,8 +7,18 @@ import {
   useDeleteModelMapping,
   useModelMappingSyncStatus,
   useSyncModelMappings,
+  useSpeedTestLatest,
+  useRunSpeedTest,
 } from '../hooks/useModelMapping';
-import type { ModelMapping, ModelMappingCreate, ModelMappingSyncResult } from '../types';
+import { ApiError } from '../services/api';
+import SpeedTestHoverChart from '../components/SpeedTestHoverChart';
+import { formatLatencyMs, formatTokensPerSecond } from '../utils';
+import type {
+  ModelMapping,
+  ModelMappingCreate,
+  ModelMappingSyncResult,
+  SpeedTestRecord,
+} from '../types';
 
 // Slide-over Panel Component
 function SlideOver({
@@ -50,12 +60,40 @@ export default function ModelMappingPage() {
   const [syncResult, setSyncResult] = useState<ModelMappingSyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
+  // Speed test: Bedrock model IDs with a run in flight (several rows may run at once).
+  const [runningSpeedTests, setRunningSpeedTests] = useState<Set<string>>(() => new Set());
+  const [speedTestError, setSpeedTestError] = useState<string | null>(null);
+
   const { data, isLoading, error } = useModelMappings();
   const { data: syncStatus } = useModelMappingSyncStatus();
+  const { data: speedTestLatest } = useSpeedTestLatest();
   const createMutation = useCreateModelMapping();
   const updateMutation = useUpdateModelMapping();
   const deleteMutation = useDeleteModelMapping();
   const syncMutation = useSyncModelMappings();
+  const runSpeedTestMutation = useRunSpeedTest();
+
+  const handleRunSpeedTest = async (bedrockModelId: string) => {
+    setSpeedTestError(null);
+    setRunningSpeedTests((prev) => new Set(prev).add(bedrockModelId));
+    try {
+      // Resolves even when the run failed (status === 'error'); the record itself
+      // carries the error and is shown in the cell / history.
+      await runSpeedTestMutation.mutateAsync(bedrockModelId);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        setSpeedTestError(t('modelMapping.speed.misconfigured'));
+      } else {
+        setSpeedTestError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setRunningSpeedTests((prev) => {
+        const next = new Set(prev);
+        next.delete(bedrockModelId);
+        return next;
+      });
+    }
+  };
 
   const handleSync = async () => {
     setSyncResult(null);
@@ -233,6 +271,25 @@ export default function ModelMappingPage() {
           </button>
         </div>
       )}
+      {speedTestError && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-xl p-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-red-400 mt-0.5">error</span>
+            <div className="text-sm text-slate-300">
+              <p className="font-medium text-red-300 mb-1">
+                {t('modelMapping.speed.column')}: {t('modelMapping.speed.failed')}
+              </p>
+              <p className="break-all">{speedTestError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSpeedTestError(null)}
+            className="text-slate-400 hover:text-slate-300 flex-shrink-0"
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">
@@ -262,6 +319,9 @@ export default function ModelMappingPage() {
               <th className="text-left px-6 py-4 text-sm font-semibold text-slate-300">
                 {t('modelMapping.source')}
               </th>
+              <th className="text-left px-6 py-4 text-sm font-semibold text-slate-300">
+                {t('modelMapping.speed.column')}
+              </th>
               <th className="text-right px-6 py-4 text-sm font-semibold text-slate-300">
                 {t('common.actions')}
               </th>
@@ -270,13 +330,13 @@ export default function ModelMappingPage() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
                   {t('common.loading')}
                 </td>
               </tr>
             ) : filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
                   No mappings found
                 </td>
               </tr>
@@ -313,6 +373,15 @@ export default function ModelMappingPage() {
                     >
                       {t(`modelMapping.sources.${item.source}`)}
                     </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <SpeedTestHoverChart bedrockModelId={item.bedrock_model_id}>
+                      <SpeedCell
+                        latest={speedTestLatest?.items[item.bedrock_model_id]}
+                        running={runningSpeedTests.has(item.bedrock_model_id)}
+                        onRun={() => handleRunSpeedTest(item.bedrock_model_id)}
+                      />
+                    </SpeedTestHoverChart>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -421,6 +490,67 @@ export default function ModelMappingPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Speed cell: latest TTFT / OTPS for a Bedrock model ID + a Test button.
+interface SpeedCellProps {
+  latest?: SpeedTestRecord;
+  running: boolean;
+  onRun: () => void;
+}
+
+function SpeedCell({ latest, running, onRun }: SpeedCellProps) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="min-w-[104px] text-xs leading-tight">
+        {!latest ? (
+          <span className="text-slate-500" title={t('modelMapping.speed.never')}>
+            —
+          </span>
+        ) : latest.status === 'error' ? (
+          <span
+            className="inline-flex items-center gap-1 text-red-400"
+            title={latest.error ?? t('modelMapping.speed.failed')}
+          >
+            <span className="material-symbols-outlined text-[16px]">error</span>
+            {t('modelMapping.speed.failed')}
+          </span>
+        ) : (
+          <>
+            <div className="text-white" title={t('modelMapping.speed.ttft')}>
+              {formatLatencyMs(latest.ttft_ms)}
+            </div>
+            <div className="text-slate-400 flex items-center gap-1" title={t('modelMapping.speed.otps')}>
+              {formatTokensPerSecond(latest.otps)}
+              {latest.has_reasoning && (
+                <span
+                  className="px-1 rounded bg-violet-500/20 text-violet-300 text-[10px]"
+                  title={t('modelMapping.speed.reasoning')}
+                >
+                  {t('modelMapping.speed.reasoning')}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+      <button
+        onClick={onRun}
+        disabled={running}
+        className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+        title={running ? t('modelMapping.speed.testing') : t('modelMapping.speed.test')}
+        aria-label={running ? t('modelMapping.speed.testing') : t('modelMapping.speed.test')}
+      >
+        <span
+          className={`material-symbols-outlined text-[18px] ${running ? 'animate-spin text-primary' : ''}`}
+        >
+          {running ? 'progress_activity' : 'bolt'}
+        </span>
+      </button>
     </div>
   );
 }

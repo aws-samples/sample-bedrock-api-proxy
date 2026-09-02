@@ -284,6 +284,20 @@
         "bundled": "{{count}} default mappings from the local snapshot (remote not fetched yet)",
         "env": "{{count}} default mappings from DEFAULT_MODEL_MAPPING + local snapshot"
       }
+    },
+    "speed": {
+      "column": "Speed",
+      "test": "Test",
+      "testing": "Testing...",
+      "never": "Not tested",
+      "ttft": "TTFT",
+      "otps": "Output speed",
+      "tokens": "Output tokens",
+      "reasoning": "reasoning",
+      "failed": "Failed",
+      "hoverTitle": "Last 10 speed tests",
+      "noData": "No data",
+      "misconfigured": "PROXY_BASE_URL or the internal API key is not configured. Check the admin backend configuration."
     }
   },
   "betaHeaders": {

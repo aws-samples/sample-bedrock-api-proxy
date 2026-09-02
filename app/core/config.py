@@ -124,6 +124,11 @@ class Settings(BaseSettings):
         default="anthropic-proxy-response-context",
         alias="DYNAMODB_RESPONSE_CONTEXT_TABLE",
     )
+    dynamodb_speed_tests_table: str = Field(
+        default="anthropic-proxy-speed-tests",
+        alias="DYNAMODB_SPEED_TESTS_TABLE",
+        description="Admin portal model speed-test results (TTFT/OTPS history)",
+    )
     usage_ttl_days: int = Field(
         default=30,
         alias="USAGE_TTL_DAYS",
@@ -249,6 +254,24 @@ class Settings(BaseSettings):
         default=15.0,
         alias="MODEL_MAPPING_SYNC_TIMEOUT_SECONDS",
         description="HTTP timeout for fetching the remote model mapping file",
+    )
+
+    # Admin portal model speed test (runs through the proxy's /v1/messages)
+    proxy_base_url: str = Field(
+        default="http://localhost:8000",
+        alias="PROXY_BASE_URL",
+        description="Base URL of the proxy the admin portal calls for model speed "
+                    "tests (behind CloudFront use the https:// distribution URL)",
+    )
+    speed_test_max_tokens: int = Field(
+        default=200,
+        alias="SPEED_TEST_MAX_TOKENS",
+        description="max_tokens sent with each speed-test request",
+    )
+    speed_test_timeout_seconds: int = Field(
+        default=90,
+        alias="SPEED_TEST_TIMEOUT_SECONDS",
+        description="Hard timeout for a single speed-test run, in seconds",
     )
 
     # Streaming Settings

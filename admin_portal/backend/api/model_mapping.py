@@ -2,7 +2,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -21,7 +21,14 @@ from admin_portal.backend.schemas.model_mapping import (
     ModelMappingSyncRequest,
     ModelMappingSyncResponse,
     ModelMappingSyncStatus,
+    SpeedTestHistoryResponse,
+    SpeedTestLatestResponse,
+    SpeedTestRecord,
+    SpeedTestRequest,
 )
+from admin_portal.backend.services import speed_test
+
+SPEED_TEST_HISTORY_MAX_LIMIT = 50
 
 router = APIRouter()
 
@@ -32,25 +39,18 @@ def get_manager():
     return ModelMappingManager(db_client)
 
 
-@router.get("", response_model=ModelMappingListResponse)
-async def list_model_mappings(
-    search: Optional[str] = Query(default=None),
-):
-    """
-    List all model mappings (default + custom).
+def _merged_mappings() -> List[ModelMappingResponse]:
+    """Default mappings (remote/bundled) merged with DynamoDB custom/override rows.
 
-    Default mappings come from the remote model_mappings.json (synced
-    in-process, see MODEL_MAPPING_SYNC_URL); custom mappings from DynamoDB.
-    If same anthropic_model_id exists in both, custom takes priority.
+    If the same anthropic_model_id exists in both, the DynamoDB row wins and is
+    reported as an override. Unsorted and unfiltered.
     """
     mapping_manager = get_manager()
 
-    # Get custom mappings from DynamoDB
     custom_mappings = mapping_manager.list_mappings()
     custom_ids = {m.get("anthropic_model_id") for m in custom_mappings}
 
-    # Build combined list
-    items = []
+    items: List[ModelMappingResponse] = []
 
     # Add default mappings (only if not overridden by custom)
     for anthropic_id, bedrock_id in settings.default_model_mapping.items():
@@ -73,6 +73,22 @@ async def list_model_mappings(
             default_bedrock_model_id=default_bedrock_id,
             updated_at=int(updated_at_val) if updated_at_val is not None else None,
         ))
+
+    return items
+
+
+@router.get("", response_model=ModelMappingListResponse)
+async def list_model_mappings(
+    search: Optional[str] = Query(default=None),
+):
+    """
+    List all model mappings (default + custom).
+
+    Default mappings come from the remote model_mappings.json (synced
+    in-process, see MODEL_MAPPING_SYNC_URL); custom mappings from DynamoDB.
+    If same anthropic_model_id exists in both, custom takes priority.
+    """
+    items = _merged_mappings()
 
     # Apply search filter if provided
     if search:
@@ -117,6 +133,56 @@ async def sync_model_mappings(request: Optional[ModelMappingSyncRequest] = None)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
     return ModelMappingSyncResponse(**summary)
+
+
+# --- Speed test routes -------------------------------------------------------
+# Declared before the ``/{anthropic_model_id:path}`` catch-all below so that
+# ``/speed-test/...`` is not swallowed by it (same reason ``/sync`` is above).
+
+
+@router.post("/speed-test", response_model=SpeedTestRecord)
+async def run_model_speed_test(request: SpeedTestRequest):
+    """
+    Run one streaming speed test for a Bedrock model ID through the proxy.
+
+    Returns the persisted record. A failed run (proxy error, timeout, malformed
+    stream) is still HTTP 200 with ``status="error"`` so it shows up in history;
+    503 only when the feature is misconfigured (no PROXY_BASE_URL, or the internal
+    ``admin-speedtest`` API key could not be provisioned).
+    """
+    try:
+        record = await speed_test.run_speed_test(request.bedrock_model_id)
+    except speed_test.SpeedTestMisconfigured as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
+        )
+    return SpeedTestRecord(**record)
+
+
+@router.get("/speed-test/latest", response_model=SpeedTestLatestResponse)
+async def speed_test_latest():
+    """Most recent speed-test record for every Bedrock model ID in the mapping list."""
+    bedrock_ids = {item.bedrock_model_id for item in _merged_mappings()}
+    latest = await speed_test.get_latest_for(bedrock_ids)
+    return SpeedTestLatestResponse(
+        items={model_id: SpeedTestRecord(**rec) for model_id, rec in latest.items()}
+    )
+
+
+@router.get(
+    "/speed-test/history/{bedrock_model_id:path}",
+    response_model=SpeedTestHistoryResponse,
+)
+async def speed_test_history(
+    bedrock_model_id: str,
+    limit: int = Query(default=10, description="1-50, clamped"),
+):
+    """Latest N speed-test runs for one Bedrock model ID, newest first."""
+    bedrock_model_id = unquote(bedrock_model_id)
+    limit = max(1, min(int(limit), SPEED_TEST_HISTORY_MAX_LIMIT))
+    items = await asyncio.to_thread(speed_test.get_history, bedrock_model_id, limit)
+    records = [SpeedTestRecord(**item) for item in items]
+    return SpeedTestHistoryResponse(items=records, count=len(records))
 
 
 @router.get("/{anthropic_model_id:path}", response_model=ModelMappingResponse)

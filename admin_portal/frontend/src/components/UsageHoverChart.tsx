@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from 'recharts';
 import { useApiKeyDailyUsage } from '../hooks';
+import { useHoverPopover } from '../hooks/useHoverPopover';
 import { formatTokens, formatCurrency } from '../utils';
 
 type Metric = 'cost' | 'tokens';
@@ -38,47 +39,14 @@ interface ChartRow {
  */
 export default function UsageHoverChart({ apiKey, metric, children }: UsageHoverChartProps) {
   const { t } = useTranslation();
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const { anchorRef, pos, handleMouseEnter, handleMouseLeave } = useHoverPopover({
+    width: POPOVER_WIDTH,
+    height: POPOVER_HEIGHT,
+    openDelayMs: OPEN_DELAY_MS,
+  });
 
   const open = pos !== null;
   const { data, isLoading } = useApiKeyDailyUsage(apiKey, DAYS, open);
-
-  useEffect(() => {
-    // Clear any pending open timer on unmount
-    return () => {
-      if (openTimerRef.current) clearTimeout(openTimerRef.current);
-    };
-  }, []);
-
-  const handleMouseEnter = () => {
-    if (openTimerRef.current) clearTimeout(openTimerRef.current);
-    openTimerRef.current = setTimeout(() => {
-      const rect = anchorRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      // Prefer below the cell; flip above when there is not enough room.
-      let top = rect.bottom + 8;
-      if (top + POPOVER_HEIGHT > window.innerHeight - 8) {
-        top = rect.top - POPOVER_HEIGHT - 8;
-      }
-      // Clamp horizontally inside the viewport.
-      let left = rect.left;
-      if (left + POPOVER_WIDTH > window.innerWidth - 8) {
-        left = window.innerWidth - POPOVER_WIDTH - 8;
-      }
-      setPos({ top: Math.max(8, top), left: Math.max(8, left) });
-    }, OPEN_DELAY_MS);
-  };
-
-  const handleMouseLeave = () => {
-    if (openTimerRef.current) {
-      clearTimeout(openTimerRef.current);
-      openTimerRef.current = null;
-    }
-    setPos(null);
-  };
 
   const { rows, total, hasData } = useMemo(() => {
     const daily = data?.daily ?? [];
