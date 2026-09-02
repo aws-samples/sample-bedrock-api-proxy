@@ -75,6 +75,7 @@ Default Anthropic → Bedrock model ID mappings are **no longer hard-coded in `a
 | `anthropic-proxy-routing-rules` | Multi-provider: routing rules |
 | `anthropic-proxy-failover-chains` | Multi-provider: cross-model failover chains |
 | `anthropic-proxy-smart-routing-config` | Multi-provider: RouteLLM smart-routing config |
+| `anthropic-proxy-speed-tests` | Admin portal model speed-test history (TTFT/OTPS per Bedrock model ID, 90-day TTL) |
 
 > **Full schema, budget computation, and aggregation details**: see [docs/architecture/detailed-flows.md](docs/architecture/detailed-flows.md)
 
@@ -132,6 +133,7 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 - **OpenTelemetry Tracing**: OTEL GenAI semantic conventions, session-based trace grouping. Zero overhead when disabled.
 - **Admin Portal**: Separate FastAPI app for API key/usage/pricing/model-mapping management with Cognito auth. The Model Mapping page shows where the active default mapping came from and has a **Refresh defaults** button (`POST /api/model-mapping/sync`, `GET /api/model-mapping/sync/status`); the portal process runs the same remote mapping sync as the proxy.
 - **Remote Default Model Mapping**: Default Anthropic → Bedrock mappings come from `model_mappings.json` in the [bedrock-api-proxy-model-mappings](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo, fetched at startup and every `MODEL_MAPPING_SYNC_INTERVAL_SECONDS` by `app/services/model_mapping_sync_service.py` (proxy and admin portal). The `model-mappings/` submodule is the offline snapshot that seeds `settings.default_model_mapping`; `DEFAULT_MODEL_MAPPING` env entries layer on top; DynamoDB overrides still win. Invalid/unreachable remote never clears the active mapping. Manual refresh: admin portal button, `POST /api/model-mapping/sync`, `scripts/sync_model_mappings.py`. Controlled by `MODEL_MAPPING_SYNC_*`.
+- **Model Speed Test**: Admin portal Model Mapping page has a per-row **Test** button that sends one streaming request through `PROXY_BASE_URL/v1/messages` (model = the row's Bedrock ID, `thinking: {"type": "disabled"}`) and records TTFT, OTPS, `output_tokens` and `has_reasoning` in `anthropic-proxy-speed-tests` (90-day TTL). Auth uses an auto-provisioned `admin-speedtest` API key (visible on the API Keys page). Hovering the Speed cell shows the last 10 runs. Routes: `POST /api/model-mapping/speed-test`, `GET /api/model-mapping/speed-test/latest`, `GET /api/model-mapping/speed-test/history/{bedrock_model_id}`. Controlled by `PROXY_BASE_URL`, `SPEED_TEST_*`.
 - **Model Pricing Sync**: Pulls model pricing from the LiteLLM price table (periodic background task in the admin portal, `POST /api/pricing/sync`, or `scripts/sync_model_pricing.py`). Synced rows are marked `pricing_source="litellm"`; manual/portal-edited rows are never overwritten unless forced. Controlled by `PRICING_SYNC_*` settings.
 - **OpenAI-Compatible API**: Non-Claude models can optionally use Bedrock's OpenAI Chat Completions API via bedrock-mantle endpoint instead of Converse API. Controlled by `ENABLE_OPENAI_COMPAT` flag. Maps `thinking` to OpenAI `reasoning` with configurable effort thresholds.
 - **OpenAI Passthrough**: New `/openai/v1/*` endpoints accept OpenAI-native Chat Completions and Responses API requests and forward them to bedrock-mantle. Distinct from `ENABLE_OPENAI_COMPAT` (which routes Anthropic-format requests on `/v1/messages`). Reuses proxy API key auth, rate limits, budgets, and usage tracking. Controlled by `ENABLE_OPENAI_PASSTHROUGH`.
@@ -216,6 +218,8 @@ Key CDK files: `cdk/config/config.ts`, `cdk/lib/ecs-stack.ts`, `cdk/scripts/depl
 **Model Mapping Sync:** `MODEL_MAPPING_SYNC_ENABLED`, `MODEL_MAPPING_SYNC_URL`, `MODEL_MAPPING_SYNC_INTERVAL_SECONDS`, `MODEL_MAPPING_SYNC_TIMEOUT_SECONDS`, `DEFAULT_MODEL_MAPPING` (local additions)
 
 **Model Pricing Sync:** `PRICING_SYNC_ENABLED`, `PRICING_SYNC_URL`, `PRICING_SYNC_INTERVAL_HOURS`, `PRICING_SYNC_PROVIDERS`, `PRICING_SYNC_CREATE_MISSING`, `PRICING_SYNC_OVERWRITE_MANUAL`
+
+**Speed Test:** `PROXY_BASE_URL`, `DYNAMODB_SPEED_TESTS_TABLE`, `SPEED_TEST_MAX_TOKENS`, `SPEED_TEST_TIMEOUT_SECONDS`
 
 See `.env.example` for full list including PTC, web search, web fetch, cache TTL, tracing, beta header, and multi-provider settings.
 
