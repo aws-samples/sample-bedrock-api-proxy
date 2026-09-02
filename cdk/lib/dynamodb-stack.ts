@@ -272,6 +272,7 @@ export class DynamoDBStack extends cdk.Stack {
   public readonly providersTable: dynamodb.Table;
   public readonly betaHeadersTable: dynamodb.Table;
   public readonly responseContextTable: dynamodb.Table;
+  public readonly speedTestsTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DynamoDBStackProps) {
     super(scope, id, props);
@@ -531,6 +532,27 @@ export class DynamoDBStack extends cdk.Stack {
       timeToLiveAttribute: 'expires_at',
     });
 
+    // Speed Tests Table (admin portal model speed-test history: TTFT/OTPS per Bedrock model ID)
+    this.speedTestsTable = new dynamodb.Table(this, 'SpeedTestsTable', {
+      partitionKey: {
+        name: 'bedrock_model_id',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'tested_at',
+        type: dynamodb.AttributeType.NUMBER,
+      },
+      billingMode:
+        config.dynamodbBillingMode === 'PAY_PER_REQUEST'
+          ? dynamodb.BillingMode.PAY_PER_REQUEST
+          : dynamodb.BillingMode.PROVISIONED,
+      readCapacity: config.dynamodbReadCapacity,
+      writeCapacity: config.dynamodbWriteCapacity,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'expires_at',
+    });
+
     // Apply tags to all tables
     Object.entries(config.tags).forEach(([key, value]) => {
       cdk.Tags.of(this.apiKeysTable).add(key, value);
@@ -545,6 +567,7 @@ export class DynamoDBStack extends cdk.Stack {
       cdk.Tags.of(this.providersTable).add(key, value);
       cdk.Tags.of(this.betaHeadersTable).add(key, value);
       cdk.Tags.of(this.responseContextTable).add(key, value);
+      cdk.Tags.of(this.speedTestsTable).add(key, value);
     });
 
     // Outputs - exportName omitted to avoid cross-stack conflicts
@@ -606,6 +629,11 @@ export class DynamoDBStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ResponseContextTableName', {
       value: this.responseContextTable.tableName,
       description: 'OpenAI Responses Context DynamoDB Table Name',
+    });
+
+    new cdk.CfnOutput(this, 'SpeedTestsTableName', {
+      value: this.speedTestsTable.tableName,
+      description: 'Model Speed Tests DynamoDB Table Name',
     });
   }
 
