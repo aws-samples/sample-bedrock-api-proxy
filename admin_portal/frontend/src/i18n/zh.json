@@ -284,6 +284,20 @@
         "bundled": "{{count}} 条默认映射来自本地快照（尚未拉取远程）",
         "env": "{{count}} 条默认映射来自 DEFAULT_MODEL_MAPPING + 本地快照"
       }
+    },
+    "speed": {
+      "column": "测速",
+      "test": "测试",
+      "testing": "测试中",
+      "never": "未测试",
+      "ttft": "首token延迟",
+      "otps": "输出速度",
+      "tokens": "输出 token",
+      "reasoning": "含推理",
+      "failed": "失败",
+      "hoverTitle": "最近 10 次测速",
+      "noData": "暂无数据",
+      "misconfigured": "未配置 PROXY_BASE_URL 或内部 key，请检查 admin 后端配置"
     }
   },
   "betaHeaders": {

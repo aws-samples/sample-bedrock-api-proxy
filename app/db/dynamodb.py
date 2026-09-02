@@ -107,6 +107,7 @@ class DynamoDBClient:
         self.providers_table_name = settings.dynamodb_providers_table
         self.beta_headers_table_name = settings.dynamodb_beta_headers_table
         self.response_context_table_name = settings.dynamodb_response_context_table
+        self.speed_tests_table_name = settings.dynamodb_speed_tests_table
 
     def create_tables(self):
         """Create all required DynamoDB tables if they don't exist."""
@@ -122,6 +123,7 @@ class DynamoDBClient:
         self._create_providers_table()
         self._create_beta_headers_table()
         self._create_response_context_table()
+        self._create_speed_tests_table()
 
     def _create_api_keys_table(self):
         """Create API keys table."""
@@ -420,6 +422,39 @@ class DynamoDBClient:
             if e.response["Error"]["Code"] == "ResourceInUseException":
                 print(f"Table already exists: {self.response_context_table_name}")
             else:
+                raise
+
+    def _create_speed_tests_table(self):
+        """Create the admin-portal model speed-test results table (TTL on expires_at)."""
+        try:
+            table = self.dynamodb.create_table(
+                TableName=self.speed_tests_table_name,
+                KeySchema=[
+                    {"AttributeName": "bedrock_model_id", "KeyType": "HASH"},
+                    {"AttributeName": "tested_at", "KeyType": "RANGE"},
+                ],
+                AttributeDefinitions=[
+                    {"AttributeName": "bedrock_model_id", "AttributeType": "S"},
+                    {"AttributeName": "tested_at", "AttributeType": "N"},
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            table.wait_until_exists()
+            print(f"Created table: {self.speed_tests_table_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceInUseException":
+                print(f"Table already exists: {self.speed_tests_table_name}")
+                return
+            raise
+
+        try:
+            self.dynamodb.meta.client.update_time_to_live(
+                TableName=self.speed_tests_table_name,
+                TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+            )
+        except ClientError as e:
+            # ValidationException = TTL already enabled on this attribute
+            if e.response["Error"]["Code"] != "ValidationException":
                 raise
 
 
@@ -2546,3 +2581,59 @@ class BetaHeaderManager:
             return False
         self.table.delete_item(Key={"header_name": header_name})
         return True
+
+
+class SpeedTestManager:
+    """Manager for admin-portal model speed-test results.
+
+    Items: PK ``bedrock_model_id`` (S), SK ``tested_at`` (N, epoch ms). Floats
+    are stored as Decimal and converted back to int/float on read so callers
+    never see Decimal.
+    """
+
+    def __init__(self, dynamodb_client: DynamoDBClient):
+        self.dynamodb = dynamodb_client.dynamodb
+        self.table = self.dynamodb.Table(dynamodb_client.speed_tests_table_name)
+
+    @staticmethod
+    def _to_item(record: Dict[str, Any]) -> Dict[str, Any]:
+        item: Dict[str, Any] = {}
+        for key, value in record.items():
+            if isinstance(value, bool):
+                item[key] = value
+            elif isinstance(value, float):
+                item[key] = Decimal(str(value))
+            elif value is None:
+                item[key] = None
+            else:
+                item[key] = value
+        return item
+
+    @staticmethod
+    def _from_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        record: Dict[str, Any] = {}
+        for key, value in item.items():
+            if isinstance(value, Decimal):
+                record[key] = int(value) if value == value.to_integral_value() else float(value)
+            else:
+                record[key] = value
+        return record
+
+    def put_result(self, record: Dict[str, Any]) -> None:
+        """Persist one speed-test run."""
+        self.table.put_item(Item=self._to_item(record))
+
+    def get_history(self, bedrock_model_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Latest ``limit`` runs for a Bedrock model ID, newest first."""
+        response = self.table.query(
+            KeyConditionExpression="bedrock_model_id = :model_id",
+            ExpressionAttributeValues={":model_id": bedrock_model_id},
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return [self._from_item(item) for item in response.get("Items", [])]
+
+    def get_latest_one(self, bedrock_model_id: str) -> Optional[Dict[str, Any]]:
+        """Most recent run for a Bedrock model ID, or None."""
+        items = self.get_history(bedrock_model_id, limit=1)
+        return items[0] if items else None

@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
+from app.converters.thinking import is_thinking_enabled
 from app.schemas.anthropic import (
     Base64ImageSource,
     ImageContent,
@@ -117,7 +118,8 @@ class AnthropicToOpenAIConverter:
         #         if effort:
         #             result["reasoning_effort"] = effort
         #             result["extra_body"] = {"include_reasoning": True}
-        if request.thinking:
+        # ``{"type": "disabled"}`` is a valid Anthropic value and must not enable reasoning.
+        if is_thinking_enabled(request.thinking):
             result["reasoning_effort"] = "high"
             result["extra_body"] = {"include_reasoning": True}
 

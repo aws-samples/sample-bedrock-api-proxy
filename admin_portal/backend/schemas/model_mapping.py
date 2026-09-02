@@ -75,3 +75,43 @@ class ModelMappingSyncStatus(BaseModel):
     last_attempt_at: Optional[float] = None
     last_success_at: Optional[float] = None
     last_error: Optional[str] = None
+
+
+class SpeedTestRequest(BaseModel):
+    """Schema for running one model speed test through the proxy."""
+
+    bedrock_model_id: str = Field(
+        ..., min_length=1, description="Bedrock model ID sent as `model` (pass-through)"
+    )
+
+
+class SpeedTestRecord(BaseModel):
+    """One persisted speed-test run (DynamoDB item == API JSON)."""
+
+    bedrock_model_id: str
+    tested_at: int = Field(..., description="Epoch milliseconds at request send")
+    status: Literal["ok", "error"]
+    ttft_ms: Optional[float] = Field(None, description="Request send -> first content_block_delta")
+    total_ms: Optional[float] = Field(None, description="Request send -> message_stop / stream end")
+    output_tokens: Optional[int] = None
+    otps: Optional[float] = Field(None, description="output_tokens / ((total_ms - ttft_ms) / 1000)")
+    has_reasoning: bool = False
+    error: Optional[str] = None
+    proxy_base_url: str
+    expires_at: int = Field(..., description="Epoch seconds (table TTL attribute)")
+
+    class Config:
+        extra = "allow"
+
+
+class SpeedTestHistoryResponse(BaseModel):
+    """Latest N runs for one Bedrock model ID, newest first."""
+
+    items: List[SpeedTestRecord]
+    count: int
+
+
+class SpeedTestLatestResponse(BaseModel):
+    """Most recent run per Bedrock model ID."""
+
+    items: Dict[str, SpeedTestRecord]

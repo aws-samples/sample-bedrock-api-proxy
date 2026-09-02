@@ -15,9 +15,9 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
+| [Database Guidelines](./database-guidelines.md) | DynamoDB managers, new-table wiring checklist (config/dynamodb.py/CDK), Decimal handling | Filled 2026-09-02 |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
+| [Quality Guidelines](./quality-guidelines.md) | Baseline lint/test state, forbidden patterns (thinking truthiness, route order), test requirements | Filled 2026-09-02 |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 
 ---

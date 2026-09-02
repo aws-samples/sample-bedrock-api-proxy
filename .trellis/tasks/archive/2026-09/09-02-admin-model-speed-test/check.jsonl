@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify record fields, env var names and table names are consistent across config.py, dynamodb.py, CDK, env.example, frontend types."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend quality conventions for the check pass."}
+{"file": ".trellis/tasks/09-02-admin-model-speed-test/research/codebase-evidence.md", "reason": "Anchors to confirm R7 fix covers all three converter branches and that routes precede the path catch-all."}

@@ -531,6 +531,57 @@ MODEL_MAPPING_SYNC_TIMEOUT_SECONDS=15
 
 ---
 
+## Model Speed Test (Admin Portal)
+
+The Model Mapping page of the admin portal has a **Speed** column with a per-row **Test** button. One click runs a single streaming request for that row's Bedrock model ID through the proxy, stores the timing result, and shows the latest TTFT/OTPS in the cell. Hovering the cell opens a chart of the last 10 runs. Rows that map to the same Bedrock model ID share history.
+
+### How it works
+
+- Admin backend (`admin_portal/backend/services/speed_test.py`, routes in `admin_portal/backend/api/model_mapping.py`) sends `POST {PROXY_BASE_URL}/v1/messages` with `stream: true`, `model = <bedrock_model_id>` (the proxy passes unknown IDs through unchanged, so the request takes the same InvokeModel / Converse / OpenAI-compat route a real client would), a fixed prose prompt, `max_tokens = SPEED_TEST_MAX_TOKENS`, and **no `thinking` field**. Claude Fable 5 / 5.1 reject an explicit `thinking.type = disabled` with a 400 (thinking is always adaptive there), so the test lets every model run its default mode and records whether thinking actually happened in `has_reasoning`. The whole run is bounded by `SPEED_TEST_TIMEOUT_SECONDS`.
+- The admin backend never calls Bedrock directly and knows nothing about routing rules; it is an ordinary HTTP client of the proxy. Behind CloudFront the ALB rejects requests without the CloudFront secret header, so CDK sets `PROXY_BASE_URL` to the distribution's HTTPS URL; without CloudFront it is the ALB `http://` URL. Locally it defaults to `http://localhost:8000`.
+
+### Metrics
+
+| Field | Definition |
+|---|---|
+| `ttft_ms` | Time from request send to the first `content_block_delta` of any type (`thinking_delta` or `text_delta`) |
+| `total_ms` | Time from request send to `message_stop` (or stream close) |
+| `output_tokens` | `usage.output_tokens` from `message_delta`; includes reasoning/thinking tokens when the model emits them |
+| `otps` | `output_tokens / ((total_ms - ttft_ms) / 1000)`; `null` if the denominator is <= 0 or no tokens were reported |
+| `has_reasoning` | `true` if any `thinking_delta` was seen |
+| `status` / `error` | `ok`, or `error` with the proxy/transport error message (non-2xx, timeout, malformed stream, no delta) |
+
+No `thinking` config is sent, so models that think by default (Fable 5.x, Opus 5, Sonnet 5 adaptive mode) may include some thinking time in TTFT; `has_reasoning` marks runs that emitted thinking deltas. Models that reason internally without exposing it (e.g. some Mantle models) will still show a large TTFT with `has_reasoning=false`; that is recorded as-is because it is what clients experience. Failed runs are stored too, so the history shows them.
+
+### Internal API key
+
+The first test lazily creates one proxy API key with `user_id = "admin-speedtest"`, `name = "admin-speedtest"`, low rate/TPM limits and a small monthly budget, and reuses it afterwards (a 401 from the proxy invalidates the cached key and re-provisions once). It is an ordinary key: it appears on the API Keys page, its usage shows up under that key in the dashboard, and deleting it just triggers re-creation on the next test.
+
+### Storage and retention
+
+Results live in the `anthropic-proxy-speed-tests` DynamoDB table (PK `bedrock_model_id`, SK `tested_at` epoch ms, TTL attribute `expires_at` = 90 days). Created by `DynamoDBClient.create_tables()` / `scripts/setup_tables.py`, defined in CDK with `RETAIN`, and granted to both the proxy and admin task roles.
+
+### Endpoints
+
+- `POST /api/model-mapping/speed-test` — body `{"bedrock_model_id": "..."}`; returns the stored record (HTTP 200 even when `status="error"`; 503 when `PROXY_BASE_URL` is empty or key provisioning fails).
+- `GET /api/model-mapping/speed-test/latest` — latest record per Bedrock model ID in the current mapping list.
+- `GET /api/model-mapping/speed-test/history/{bedrock_model_id}?limit=10` — newest first, `limit` 1-50.
+
+### Configuration
+
+```bash
+PROXY_BASE_URL=http://localhost:8000          # proxy the admin portal tests against (CDK sets CloudFront/ALB URL)
+DYNAMODB_SPEED_TESTS_TABLE=anthropic-proxy-speed-tests
+SPEED_TEST_MAX_TOKENS=200
+SPEED_TEST_TIMEOUT_SECONDS=90
+```
+
+### Related proxy fix: disabled thinking no longer enables reasoning
+
+Before this feature, a request carrying `"thinking": {"type": "disabled"}` was treated as truthy on the OpenAI-compat path (`AnthropicToOpenAIConverter` set `reasoning_effort="high"`) and on the Converse path (`AnthropicToBedrockConverter` set Nova 2 `reasoningConfig` / Kimi `reasoning_effort`), i.e. it *enabled* reasoning. Both converters now only enable reasoning when `thinking.type == "enabled"`; `thinking=None` and `enabled` behave exactly as before, and the InvokeModel path still forwards the dict unchanged (`disabled` is valid Anthropic API input).
+
+---
+
 ## OpenAI Passthrough
 
 Adds new `/openai/v1/*` endpoints that accept OpenAI-native API formats and call `bedrock-mantle`. Distinct from `ENABLE_OPENAI_COMPAT` (which converts Anthropic-format requests on `/v1/messages` into OpenAI calls).

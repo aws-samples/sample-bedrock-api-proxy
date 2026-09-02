@@ -46,3 +46,37 @@ export interface ModelMappingSyncStatus {
   last_success_at?: number | null;
   last_error?: string | null;
 }
+
+/**
+ * One speed-test run through the proxy for a Bedrock model ID.
+ * Mirrors the DynamoDB item / `SpeedTestRecord` pydantic model in the admin backend.
+ */
+export interface SpeedTestRecord {
+  bedrock_model_id: string;
+  /** Epoch milliseconds at request send. */
+  tested_at: number;
+  status: 'ok' | 'error';
+  ttft_ms: number | null;
+  total_ms: number | null;
+  output_tokens: number | null;
+  /** Output tokens per second (excluding TTFT), null when not computable. */
+  otps: number | null;
+  has_reasoning: boolean;
+  error: string | null;
+  proxy_base_url: string;
+}
+
+export interface SpeedTestRequest {
+  bedrock_model_id: string;
+}
+
+export interface SpeedTestHistoryResponse {
+  /** Newest first. */
+  items: SpeedTestRecord[];
+  count: number;
+}
+
+export interface SpeedTestLatestResponse {
+  /** Keyed by bedrock_model_id. */
+  items: Record<string, SpeedTestRecord>;
+}

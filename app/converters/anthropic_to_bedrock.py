@@ -9,6 +9,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 from app.core.config import settings
+from app.converters.thinking import is_thinking_enabled
 from app.schemas.anthropic import (
     Base64ImageSource,
     ContentBlock,
@@ -109,7 +110,8 @@ class AnthropicToBedrockConverter:
             additional_fields["top_k"] = request.top_k
 
         # Handle extended thinking if enabled
-        if request.thinking and settings.enable_extended_thinking:
+        # ``{"type": "disabled"}`` is a valid Anthropic value and must not enable reasoning.
+        if is_thinking_enabled(request.thinking) and settings.enable_extended_thinking:
             if self._is_nova_2_model():
                 # Nova 2 models use a specific reasoningConfig format
                 # Extract effort level from thinking config if provided, default to "medium"

@@ -38,3 +38,27 @@ Checked whether the proxy accepts Anthropic's mid-conversation-tool-changes-2026
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Admin portal model speed test (TTFT/OTPS) via proxy
+
+**Date**: 2026-09-02
+**Task**: Admin portal model speed test (TTFT/OTPS) via proxy
+**Branch**: `feat/admin-model-speed-test`
+
+### Summary
+
+Planned and shipped the admin-portal model speed test: Speed column on Model Mapping page, POST/GET speed-test routes, SpeedTestManager + anthropic-proxy-speed-tests table (90d TTL), auto-provisioned admin-speedtest key, PROXY_BASE_URL wiring in CDK (cdk.Lazy for CloudFront domain), and fixed converters so thinking type=disabled no longer enables reasoning on OpenAI-compat/Converse. Filled backend database + quality specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ad006b` | (see git log) |
+| `41f3d30` | (see git log) |
+| `aab0e45` | (see git log) |
+| `a7595c1` | (see git log) |
+
+### Status
+
+[OK] **Completed**
