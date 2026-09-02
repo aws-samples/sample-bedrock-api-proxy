@@ -537,7 +537,7 @@ The Model Mapping page of the admin portal has a **Speed** column with a per-row
 
 ### How it works
 
-- Admin backend (`admin_portal/backend/services/speed_test.py`, routes in `admin_portal/backend/api/model_mapping.py`) sends `POST {PROXY_BASE_URL}/v1/messages` with `stream: true`, `model = <bedrock_model_id>` (the proxy passes unknown IDs through unchanged, so the request takes the same InvokeModel / Converse / OpenAI-compat route a real client would), a fixed prose prompt, `max_tokens = SPEED_TEST_MAX_TOKENS`, and `"thinking": {"type": "disabled"}`. The whole run is bounded by `SPEED_TEST_TIMEOUT_SECONDS`.
+- Admin backend (`admin_portal/backend/services/speed_test.py`, routes in `admin_portal/backend/api/model_mapping.py`) sends `POST {PROXY_BASE_URL}/v1/messages` with `stream: true`, `model = <bedrock_model_id>` (the proxy passes unknown IDs through unchanged, so the request takes the same InvokeModel / Converse / OpenAI-compat route a real client would), a fixed prose prompt, `max_tokens = SPEED_TEST_MAX_TOKENS`, and **no `thinking` field**. Claude Fable 5 / 5.1 reject an explicit `thinking.type = disabled` with a 400 (thinking is always adaptive there), so the test lets every model run its default mode and records whether thinking actually happened in `has_reasoning`. The whole run is bounded by `SPEED_TEST_TIMEOUT_SECONDS`.
 - The admin backend never calls Bedrock directly and knows nothing about routing rules; it is an ordinary HTTP client of the proxy. Behind CloudFront the ALB rejects requests without the CloudFront secret header, so CDK sets `PROXY_BASE_URL` to the distribution's HTTPS URL; without CloudFront it is the ALB `http://` URL. Locally it defaults to `http://localhost:8000`.
 
 ### Metrics
@@ -551,7 +551,7 @@ The Model Mapping page of the admin portal has a **Speed** column with a per-row
 | `has_reasoning` | `true` if any `thinking_delta` was seen |
 | `status` / `error` | `ok`, or `error` with the proxy/transport error message (non-2xx, timeout, malformed stream, no delta) |
 
-Thinking is disabled on every test so numbers are comparable across models and over time. Models that reason internally without exposing it (e.g. some Mantle models) will still show a large TTFT with `has_reasoning=false`; that is recorded as-is because it is what clients experience. Failed runs are stored too, so the history shows them.
+No `thinking` config is sent, so models that think by default (Fable 5.x, Opus 5, Sonnet 5 adaptive mode) may include some thinking time in TTFT; `has_reasoning` marks runs that emitted thinking deltas. Models that reason internally without exposing it (e.g. some Mantle models) will still show a large TTFT with `has_reasoning=false`; that is recorded as-is because it is what clients experience. Failed runs are stored too, so the history shows them.
 
 ### Internal API key
 

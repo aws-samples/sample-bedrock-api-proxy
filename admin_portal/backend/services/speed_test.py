@@ -3,7 +3,8 @@
 The admin backend is a plain client of the proxy (``PROXY_BASE_URL``): it never
 calls Bedrock itself. Each run sends an Anthropic-format streaming request with
 ``model = <bedrock_model_id>`` (the proxy passes unknown IDs through) and
-``thinking`` disabled, measures TTFT / total time / output tokens from the SSE
+no ``thinking`` field (each model runs its default mode; Fable 5.x rejects an
+explicit ``disabled``), measures TTFT / total time / output tokens from the SSE
 events, and persists one record in the speed-tests table.
 """
 
@@ -201,7 +202,6 @@ def build_request_body(bedrock_model_id: str) -> dict[str, Any]:
         "model": bedrock_model_id,
         "max_tokens": settings.speed_test_max_tokens,
         "stream": True,
-        "thinking": {"type": "disabled"},
         "messages": [{"role": "user", "content": SPEED_TEST_PROMPT}],
     }
 

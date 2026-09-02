@@ -296,7 +296,7 @@ async def test_inactive_key_is_not_reused(svc, tables):
 # --------------------------------------------------------------------------- run_speed_test
 
 
-async def test_run_ok_persists_record_and_sends_disabled_thinking(svc, monkeypatch):
+async def test_run_ok_persists_record_and_omits_thinking_field(svc, monkeypatch):
     seen = install_transport(
         monkeypatch,
         svc,
@@ -324,7 +324,9 @@ async def test_run_ok_persists_record_and_sends_disabled_thinking(svc, monkeypat
     body = json.loads(req.content)
     assert body["model"] == MODEL
     assert body["stream"] is True
-    assert body["thinking"] == {"type": "disabled"}
+    # No thinking config: Fable 5.x rejects thinking.type=disabled with a 400,
+    # so every model runs its default mode and has_reasoning records what happened.
+    assert "thinking" not in body
     assert body["max_tokens"] == settings.speed_test_max_tokens
     assert body["messages"][0]["content"] == svc.SPEED_TEST_PROMPT
 
