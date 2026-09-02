@@ -600,12 +600,26 @@ export function validateConfig(config: EnvironmentConfig, environmentName: strin
     }
   }
 
-  // Web search needs a provider credential to call out to.
-  if (config.enableWebSearch && !config.webSearchApiKey) {
-    errors.push(
-      `enableWebSearch is true but webSearchApiKey is not set. Export ` +
-      `WEB_SEARCH_API_KEY for this deploy, or set enableWebSearch to false.`
-    );
+  // Web search needs something to call out to. Tavily/Brave use an API key;
+  // the AgentCore provider uses the Gateway MCP URL + task-role IAM instead
+  // (see app/services/web_search/providers.py create_search_provider).
+  if (config.enableWebSearch) {
+    const provider = (config.webSearchProvider || 'tavily').toLowerCase();
+    if (provider === 'agentcore') {
+      if (!config.agentcoreGatewayUrl) {
+        errors.push(
+          `enableWebSearch is true with webSearchProvider 'agentcore' but ` +
+          `agentcoreGatewayUrl is not set. Export AGENTCORE_GATEWAY_URL for ` +
+          `this deploy, or set enableWebSearch to false.`
+        );
+      }
+    } else if (!config.webSearchApiKey) {
+      errors.push(
+        `enableWebSearch is true with webSearchProvider '${provider}' but ` +
+        `webSearchApiKey is not set. Export WEB_SEARCH_API_KEY for this ` +
+        `deploy, or set enableWebSearch to false.`
+      );
+    }
   }
 
   if (errors.length > 0) {
