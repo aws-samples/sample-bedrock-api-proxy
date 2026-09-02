@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
+- **Total Sessions**: 3
 - **Last Active**: 2026-09-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~64 | Active |
+| `journal-1.md` | ~85 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-09-02 | OpenAI-compat: max_completion_tokens fix for gpt-5.6 | `0a71bdf` | `fix/openai-compat-max-completion-tokens` |
 | 2 | 2026-09-02 | Admin portal model speed test (TTFT/OTPS) via proxy | `0ad006b`, `41f3d30`, `aab0e45`, `a7595c1` | `feat/admin-model-speed-test` |
 | 1 | 2026-07-26 | Mid-conversation tool changes support | `b478b34` | `feat/mid-conversation-tool-changes` |
 <!-- @@@/auto:session-history -->
