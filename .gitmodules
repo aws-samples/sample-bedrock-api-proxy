@@ -1,0 +1,3 @@
+[submodule "model-mappings"]
+	path = model-mappings
+	url = https://github.com/xiehust/bedrock-api-proxy-model-mappings.git

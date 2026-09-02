@@ -175,9 +175,11 @@ MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-east-2.api.aws/openai/v1 \
 ### 方式二：本地开发
 
 ```bash
-# 安装
+# 安装（model-mappings/ 子模块保存默认模型映射的离线快照）
+git clone --recurse-submodules https://github.com/xiehust/sample-bedrock-api-proxy.git
+cd sample-bedrock-api-proxy   # 已经 clone 过？执行：git submodule update --init
 pip install uv && uv sync
-cp .env.example .env  # 配置环境变量
+cp env.example .env  # 配置环境变量
 
 # 初始化 DynamoDB 表并创建 API Key
 uv run scripts/setup_tables.py

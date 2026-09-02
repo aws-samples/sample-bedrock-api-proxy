@@ -96,6 +96,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"Warning: Failed to create DynamoDB tables: {e}")
 
+    # Load default model mappings from the remote file (falls back to the
+    # model-mappings/ submodule snapshot) and start the periodic refresh
+    from app.services.model_mapping_sync_service import (
+        start_model_mapping_sync,
+        stop_model_mapping_sync,
+    )
+    await start_model_mapping_sync()
+
     print("Application started successfully")
 
     # Initialize multi-provider gateway modules (if enabled)
@@ -211,6 +219,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Shutting down application...")
+    stop_model_mapping_sync()
 
     # Flush queued usage/billing writes with a bounded deadline
     from app.db.dynamodb import drain_usage_writes

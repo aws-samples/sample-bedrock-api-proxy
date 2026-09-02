@@ -23,6 +23,9 @@ import type {
   ModelMapping,
   ModelMappingCreate,
   ModelMappingUpdate,
+  ModelMappingSyncRequest,
+  ModelMappingSyncResult,
+  ModelMappingSyncStatus,
   ModelMappingListResponse,
   ProviderKey,
   ProviderKeyCreate,
@@ -344,6 +347,17 @@ export const modelMappingApi = {
     return apiFetch(`/model-mapping/${encodeURIComponent(anthropicModelId)}`, {
       method: 'DELETE',
     });
+  },
+
+  sync: async (data?: ModelMappingSyncRequest): Promise<ModelMappingSyncResult> => {
+    return apiFetch('/model-mapping/sync', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    });
+  },
+
+  syncStatus: async (): Promise<ModelMappingSyncStatus> => {
+    return apiFetch('/model-mapping/sync/status');
   },
 };
 

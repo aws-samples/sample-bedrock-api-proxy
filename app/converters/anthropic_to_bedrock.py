@@ -48,10 +48,14 @@ class AnthropicToBedrockConverter:
         Args:
             dynamodb_client: Optional DynamoDB client for custom mappings
         """
-        self.model_mapping = settings.default_model_mapping
         self.dynamodb_client = dynamodb_client
         self._model_mapping_manager = None
         self._resolved_model_id = None  # Cache the resolved model ID
+
+    @property
+    def model_mapping(self) -> Dict[str, str]:
+        """Live default mapping (refreshed in-process by the model mapping sync service)."""
+        return settings.default_model_mapping
 
     def convert_request(
         self, request: MessageRequest, anthropic_beta: Optional[str] = None

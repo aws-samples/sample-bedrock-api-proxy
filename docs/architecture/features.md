@@ -501,6 +501,36 @@ PRICING_SYNC_OVERWRITE_MANUAL=False   # never overwrite manual rows unless True
 
 ---
 
+## Remote Default Model Mapping Sync
+
+Default Anthropic → Bedrock model ID mappings live in the [`bedrock-api-proxy-model-mappings`](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo (`model_mappings.json`) instead of `app/core/config.py`, so a new model can be enabled across all deployments by pushing to that repo.
+
+### How it works
+
+- Core logic: `app/services/model_mapping_sync_service.py`. `run_sync()` fetches `MODEL_MAPPING_SYNC_URL`, validates the payload (`{"schema_version": 1, "mappings": {id: bedrock_id}}`; a flat object is also accepted), layers `DEFAULT_MODEL_MAPPING` env entries on top, and atomically replaces `settings.default_model_mapping`. Every reader (`AnthropicToBedrockConverter`, `BedrockProvider.supports_model`, `list_available_models`, admin portal, pricing sync) goes through that attribute, so the refresh is visible immediately.
+- **Offline snapshot**: the same repo is checked out as the `model-mappings/` git submodule; `load_bundled_model_mapping()` in `app/core/config.py` seeds the default mapping from `model-mappings/model_mappings.json` at import time, so unit tests and a proxy without network still resolve models. Both Dockerfiles copy that single file into the image — run `git submodule update --init` before building.
+- **Failure handling**: HTTP errors, invalid JSON, non-string entries or an empty `mappings` object raise and are recorded in the sync status; the previously active mapping is kept. A bad commit in the mappings repo therefore never blanks the proxy's mapping.
+- **Layering** (highest priority first): DynamoDB mapping table (per-deployment overrides via the admin portal, resolved at request time by `ModelMappingManager`) → `DEFAULT_MODEL_MAPPING` env entries → remote file → submodule snapshot → pass-through.
+
+### Triggers
+
+| Trigger | How |
+|---|---|
+| Startup | `start_model_mapping_sync()` in both `app/main.py` and `admin_portal/backend/main.py` lifespans runs one sync (bounded by `MODEL_MAPPING_SYNC_TIMEOUT_SECONDS`) before serving; on failure the snapshot stays active |
+| Periodic | Same scheduler, every `MODEL_MAPPING_SYNC_INTERVAL_SECONDS` (default 3600), independently in each proxy worker and in the admin portal |
+| Manual | Admin portal → Model Mapping → **Refresh defaults**; `POST /api/model-mapping/sync` (`dry_run`, `url` optional); `GET /api/model-mapping/sync/status`; `scripts/sync_model_mappings.py` (`--validate <file>` checks a local edit) |
+
+### Configuration
+
+```bash
+MODEL_MAPPING_SYNC_ENABLED=True
+MODEL_MAPPING_SYNC_URL=https://raw.githubusercontent.com/xiehust/bedrock-api-proxy-model-mappings/main/model_mappings.json
+MODEL_MAPPING_SYNC_INTERVAL_SECONDS=3600
+MODEL_MAPPING_SYNC_TIMEOUT_SECONDS=15
+```
+
+---
+
 ## OpenAI Passthrough
 
 Adds new `/openai/v1/*` endpoints that accept OpenAI-native API formats and call `bedrock-mantle`. Distinct from `ENABLE_OPENAI_COMPAT` (which converts Anthropic-format requests on `/v1/messages` into OpenAI calls).

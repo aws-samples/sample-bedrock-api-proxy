@@ -8,8 +8,9 @@
 
 ```bash
 # Install
+git submodule update --init   # model-mappings/ = offline default model-mapping snapshot
 uv sync                    # or: pip install -e ".[dev]"
-cp .env.example .env       # configure AWS credentials + settings
+cp env.example .env        # configure AWS credentials + settings
 
 # Setup
 uv run scripts/setup_tables.py
@@ -48,6 +49,16 @@ black app tests && ruff check app tests && mypy app
 
 All config in `app/core/config.py` (Pydantic Settings, loads from env vars / `.env`). When adding new features, add corresponding feature flags and config options.
 
+### Model Mapping Source of Truth (2026-09)
+
+Default Anthropic → Bedrock model ID mappings are **no longer hard-coded in `app/core/config.py`**. They live in a separate repo, [xiehust/bedrock-api-proxy-model-mappings](https://github.com/xiehust/bedrock-api-proxy-model-mappings) (`model_mappings.json`), which is also checked out here as the `model-mappings/` git submodule.
+
+- **Runtime**: `app/services/model_mapping_sync_service.py` fetches `MODEL_MAPPING_SYNC_URL` at startup (proxy + admin portal) and every `MODEL_MAPPING_SYNC_INTERVAL_SECONDS`, then atomically replaces `settings.default_model_mapping`. Pushing to the mappings repo rolls out to all deployments without a redeploy.
+- **Offline fallback**: `load_bundled_model_mapping()` seeds `settings.default_model_mapping` from `model-mappings/model_mappings.json` at import time. Always clone with `--recurse-submodules` or run `git submodule update --init`; without it the default mapping is empty until the first remote sync succeeds, and both Dockerfiles fail to build (they `COPY` that file).
+- **Priority**: DynamoDB mapping table (admin portal overrides) > `DEFAULT_MODEL_MAPPING` env entries (layered on top, not a full replacement) > remote file > submodule snapshot > pass-through.
+- **Safety**: an unreachable URL, invalid JSON, non-string entries, or an empty `mappings` object never clears the active mapping; the error is exposed at `GET /api/model-mapping/sync/status` and on the admin Model Mapping page.
+- **To add a model**: edit the JSON in the submodule, `uv run python scripts/sync_model_mappings.py --validate model-mappings/model_mappings.json`, push to the mappings repo, then `git add model-mappings` here to bump the pin. Never add mappings back into `config.py`. See "Adding a New Model Mapping" below.
+
 ### DynamoDB Tables
 
 | Table | Purpose |
@@ -56,7 +67,7 @@ All config in `app/core/config.py` (Pydantic Settings, loads from env vars / `.e
 | `anthropic-proxy-usage` | Per-request usage logs |
 | `anthropic-proxy-usage-stats` | Aggregated token counts |
 | `anthropic-proxy-model-pricing` | Model pricing data |
-| `anthropic-proxy-model-mapping` | Anthropic → Bedrock model ID mapping |
+| `anthropic-proxy-model-mapping` | Anthropic → Bedrock model ID mapping (per-deployment overrides of the remote defaults) |
 | `anthropic-proxy-beta-headers` | Anthropic → Bedrock beta header mappings |
 | `anthropic-proxy-response-context` | OpenAI Responses API passthrough context store |
 | `anthropic-proxy-providers` | Multi-provider: Bedrock account/provider definitions |
@@ -82,6 +93,7 @@ app/
 ├── keypool/          # Multi-provider API-key pool: rotation, failover, encryption
 ├── compression/      # Agent context compression
 └── tracing/          # OpenTelemetry distributed tracing
+model-mappings/       # git submodule: github.com/xiehust/bedrock-api-proxy-model-mappings (default model_mappings.json snapshot)
 admin_portal/
 ├── backend/          # Separate FastAPI app (auth, dashboard, keys, pricing, model_mapping, providers, provider_keys, routing, failover, beta_headers)
 └── frontend/         # Static frontend (served at /admin/ in production)
@@ -118,7 +130,8 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 - **Mid-Conversation Tool Changes**: `role: "system"` messages carrying `tool_addition`/`tool_removal` blocks (beta `mid-conversation-tool-changes-2026-07-01`) are validated and forwarded unchanged on the InvokeModel path. Tool references: `tool_reference`, `mcp_tool_reference`, `mcp_toolset_reference`. Converse API has no equivalent, so system-role messages are dropped there.
 - **Cache TTL**: Extends `cache_control` with configurable TTL (5m or 1h). Priority: API key → request → env → default.
 - **OpenTelemetry Tracing**: OTEL GenAI semantic conventions, session-based trace grouping. Zero overhead when disabled.
-- **Admin Portal**: Separate FastAPI app for API key/usage/pricing management with Cognito auth.
+- **Admin Portal**: Separate FastAPI app for API key/usage/pricing/model-mapping management with Cognito auth. The Model Mapping page shows where the active default mapping came from and has a **Refresh defaults** button (`POST /api/model-mapping/sync`, `GET /api/model-mapping/sync/status`); the portal process runs the same remote mapping sync as the proxy.
+- **Remote Default Model Mapping**: Default Anthropic → Bedrock mappings come from `model_mappings.json` in the [bedrock-api-proxy-model-mappings](https://github.com/xiehust/bedrock-api-proxy-model-mappings) repo, fetched at startup and every `MODEL_MAPPING_SYNC_INTERVAL_SECONDS` by `app/services/model_mapping_sync_service.py` (proxy and admin portal). The `model-mappings/` submodule is the offline snapshot that seeds `settings.default_model_mapping`; `DEFAULT_MODEL_MAPPING` env entries layer on top; DynamoDB overrides still win. Invalid/unreachable remote never clears the active mapping. Manual refresh: admin portal button, `POST /api/model-mapping/sync`, `scripts/sync_model_mappings.py`. Controlled by `MODEL_MAPPING_SYNC_*`.
 - **Model Pricing Sync**: Pulls model pricing from the LiteLLM price table (periodic background task in the admin portal, `POST /api/pricing/sync`, or `scripts/sync_model_pricing.py`). Synced rows are marked `pricing_source="litellm"`; manual/portal-edited rows are never overwritten unless forced. Controlled by `PRICING_SYNC_*` settings.
 - **OpenAI-Compatible API**: Non-Claude models can optionally use Bedrock's OpenAI Chat Completions API via bedrock-mantle endpoint instead of Converse API. Controlled by `ENABLE_OPENAI_COMPAT` flag. Maps `thinking` to OpenAI `reasoning` with configurable effort thresholds.
 - **OpenAI Passthrough**: New `/openai/v1/*` endpoints accept OpenAI-native Chat Completions and Responses API requests and forward them to bedrock-mantle. Distinct from `ENABLE_OPENAI_COMPAT` (which routes Anthropic-format requests on `/v1/messages`). Reuses proxy API key auth, rate limits, budgets, and usage tracking. Controlled by `ENABLE_OPENAI_PASSTHROUGH`.
@@ -136,6 +149,19 @@ Each feature has detailed docs in [docs/architecture/features.md](docs/architect
 
 ### Adding a New Model Mapping
 
+**Default for every deployment** — edit `model_mappings.json` in the `model-mappings/` submodule (repo `xiehust/bedrock-api-proxy-model-mappings`), validate, push, then bump the submodule pin here:
+
+```bash
+cd model-mappings && $EDITOR model_mappings.json
+uv run python ../scripts/sync_model_mappings.py --validate model_mappings.json
+git commit -am "Add <model>" && git push origin main
+cd .. && git add model-mappings && git commit -m "chore: bump model-mappings snapshot"
+```
+
+Running proxies pick it up on the next refresh (no redeploy). Do **not** hard-code mappings in `app/core/config.py`.
+
+**Per-deployment override** — DynamoDB (admin portal, or):
+
 ```python
 from app.db.dynamodb import DynamoDBClient
 client = DynamoDBClient()
@@ -145,7 +171,7 @@ client.model_mapping_manager.set_mapping(
 )
 ```
 
-Or update `DEFAULT_MODEL_MAPPING` in `app/core/config.py`.
+or `DEFAULT_MODEL_MAPPING='{"id":"bedrock-id"}'` in the environment (layered on top of the remote defaults).
 
 ### Streaming
 
@@ -186,6 +212,8 @@ Key CDK files: `cdk/config/config.ts`, `cdk/lib/ecs-stack.ts`, `cdk/scripts/depl
 **OpenAI-Compat:** `ENABLE_OPENAI_COMPAT`, `ENABLE_OPENAI_PASSTHROUGH`, `BEDROCK_API_KEY`, `MANTLE_ENDPOINT_URL`, `OPENAI_COMPAT_THINKING_HIGH_THRESHOLD`, `OPENAI_COMPAT_THINKING_MEDIUM_THRESHOLD`
 
 **Multi-Provider Gateway:** `MULTI_PROVIDER_ENABLED`, `ROUTING_ENABLED`, `SMART_ROUTING_ENABLED`, `FAILOVER_ENABLED`, `COMPRESSION_ENABLED`, `CACHE_AWARE_ROUTING_ENABLED`, `PROVIDER_KEY_ENCRYPTION_SECRET`
+
+**Model Mapping Sync:** `MODEL_MAPPING_SYNC_ENABLED`, `MODEL_MAPPING_SYNC_URL`, `MODEL_MAPPING_SYNC_INTERVAL_SECONDS`, `MODEL_MAPPING_SYNC_TIMEOUT_SECONDS`, `DEFAULT_MODEL_MAPPING` (local additions)
 
 **Model Pricing Sync:** `PRICING_SYNC_ENABLED`, `PRICING_SYNC_URL`, `PRICING_SYNC_INTERVAL_HOURS`, `PRICING_SYNC_PROVIDERS`, `PRICING_SYNC_CREATE_MISSING`, `PRICING_SYNC_OVERWRITE_MANUAL`
 

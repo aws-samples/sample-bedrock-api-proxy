@@ -3,11 +3,45 @@ Application configuration management using Pydantic Settings.
 
 Loads configuration from environment variables with validation and type safety.
 """
+import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Offline snapshot of the default model mapping: the ``model-mappings`` git
+# submodule (github.com/xiehust/bedrock-api-proxy-model-mappings) checked out at
+# the repo root. Run ``git submodule update --init`` after cloning.
+BUNDLED_MODEL_MAPPING_PATH = (
+    Path(__file__).resolve().parents[2] / "model-mappings" / "model_mappings.json"
+)
+
+
+@lru_cache(maxsize=1)
+def load_bundled_model_mapping() -> Dict[str, str]:
+    """
+    Load the offline snapshot of the default model mapping.
+
+    Reads ``model-mappings/model_mappings.json`` from the git submodule — the
+    same file the sync service later pulls from GitHub. It seeds
+    ``settings.default_model_mapping`` so the proxy has a working mapping
+    before the first remote sync succeeds (or when sync is disabled). Returns
+    an empty dict if the submodule is not checked out.
+    """
+    try:
+        with BUNDLED_MODEL_MAPPING_PATH.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    mappings = payload.get("mappings", payload) if isinstance(payload, dict) else {}
+    return {
+        str(k): str(v)
+        for k, v in mappings.items()
+        if isinstance(k, str) and isinstance(v, str) and k and v
+    }
 
 
 class Settings(BaseSettings):
@@ -173,46 +207,48 @@ class Settings(BaseSettings):
     )
 
     # Model Mapping
+    # Default Anthropic model ID -> Bedrock model ID mappings.
+    #
+    # Source of truth is the remote JSON pulled by
+    # app/services/model_mapping_sync_service.py (MODEL_MAPPING_SYNC_URL, repo
+    # github.com/xiehust/bedrock-api-proxy-model-mappings). The value here is
+    # seeded from the pinned snapshot in the model-mappings/ git submodule so
+    # the proxy works offline / before the first sync, and is replaced
+    # in-process by the sync service once the remote file has been fetched.
+    #
+    # Setting DEFAULT_MODEL_MAPPING (JSON) adds per-deployment entries that are
+    # layered on top of the remote mappings (and replace the bundled snapshot
+    # when sync is disabled).
     default_model_mapping: Dict[str, str] = Field(
-        default={
-            # Anthropic model IDs -> Bedrock model ARNs
-            "claude-fable-5-1": "global.anthropic.claude-fable-5-1",
-            "claude-fable-5": "global.anthropic.claude-fable-5",
-            "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
-            "claude-opus-5": "global.anthropic.claude-opus-5",
-            "claude-opus-4-8": "global.anthropic.claude-opus-4-8",
-            "claude-opus-4-7": "global.anthropic.claude-opus-4-7",
-            "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
-            "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
-            "claude-opus-4-6": "global.anthropic.claude-opus-4-6-v1",
-            "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-            "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "claude-3-5-haiku-20241022": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-            # 1M-context aliases — same Bedrock target; the 1M window is
-            # activated by the `anthropic-beta: context-1m-2025-08-07` header
-            # that clients (e.g. Claude Code) attach to the request.
-            "claude-fable-5-1-us": "us.anthropic.claude-fable-5-1",
-            "claude-fable-5-1-us[1m]": "us.anthropic.claude-fable-5-1",
-            "claude-fable-5-1[1m]": "global.anthropic.claude-fable-5-1",
-            "claude-fable-5-us": "us.anthropic.claude-fable-5",
-            "claude-fable-5-us[1m]": "us.anthropic.claude-fable-5",
-            "claude-fable-5[1m]": "global.anthropic.claude-fable-5",
-            "claude-sonnet-5[1m]": "global.anthropic.claude-sonnet-5",
-            "claude-opus-5[1m]": "global.anthropic.claude-opus-5",
-            "claude-opus-4-8[1m]": "global.anthropic.claude-opus-4-8",
-            "claude-opus-4-7[1m]": "global.anthropic.claude-opus-4-7",
-            "claude-opus-4-6[1m]": "global.anthropic.claude-opus-4-6-v1",
-            "claude-sonnet-4-6[1m]": "global.anthropic.claude-sonnet-4-6",
-            "claude-sonnet-5[1m]": "global.anthropic.claude-sonnet-5",
-            # Non-Claude Bedrock models (identity-mapped).
-            "minimax.minimax-m2.5": "minimax.minimax-m2.5",
-            "zai.glm-5": "zai.glm-5",
-            "moonshotai.kimi-k2.5": "moonshotai.kimi-k2.5",
-            "gpt-5.5": "openai.gpt-5.5",
-            "gpt-5.4": "openai.gpt-5.4",
-        },
+        default_factory=lambda: dict(load_bundled_model_mapping()),
         alias="DEFAULT_MODEL_MAPPING",
+    )
+
+    # Model Mapping Sync (remote JSON)
+    model_mapping_sync_enabled: bool = Field(
+        default=True,
+        alias="MODEL_MAPPING_SYNC_ENABLED",
+        description="Pull default model mappings from MODEL_MAPPING_SYNC_URL at "
+                    "startup and periodically; when disabled only the bundled "
+                    "snapshot / DEFAULT_MODEL_MAPPING env var are used.",
+    )
+    model_mapping_sync_url: str = Field(
+        default=(
+            "https://raw.githubusercontent.com/xiehust/"
+            "bedrock-api-proxy-model-mappings/main/model_mappings.json"
+        ),
+        alias="MODEL_MAPPING_SYNC_URL",
+        description="URL of the model_mappings.json to pull default mappings from",
+    )
+    model_mapping_sync_interval_seconds: int = Field(
+        default=3600,
+        alias="MODEL_MAPPING_SYNC_INTERVAL_SECONDS",
+        description="Interval between automatic model mapping refreshes, in seconds",
+    )
+    model_mapping_sync_timeout_seconds: float = Field(
+        default=15.0,
+        alias="MODEL_MAPPING_SYNC_TIMEOUT_SECONDS",
+        description="HTTP timeout for fetching the remote model mapping file",
     )
 
     # Streaming Settings

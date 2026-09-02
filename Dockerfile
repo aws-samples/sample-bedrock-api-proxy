@@ -51,6 +51,10 @@ COPY pyproject.toml uv.lock README.md /app/
 COPY app /app/app
 COPY main.py /app/
 
+# Offline model-mapping snapshot (git submodule; run `git submodule update --init`
+# before building). Seeds the default mapping until the remote sync succeeds.
+COPY model-mappings/model_mappings.json /app/model-mappings/model_mappings.json
+
 # Set ownership
 RUN chown -R appuser:appuser /app
 

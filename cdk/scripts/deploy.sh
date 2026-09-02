@@ -309,6 +309,17 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# The Docker images copy model-mappings/model_mappings.json (git submodule) as the
+# offline default model-mapping snapshot; make sure it is checked out.
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ ! -f "$REPO_ROOT/model-mappings/model_mappings.json" ]; then
+    echo -e "${YELLOW}model-mappings submodule not checked out; running git submodule update --init${NC}"
+    if ! git -C "$REPO_ROOT" submodule update --init model-mappings || [ ! -f "$REPO_ROOT/model-mappings/model_mappings.json" ]; then
+        echo -e "${RED}Error: model-mappings/model_mappings.json is missing. Run: git submodule update --init${NC}"
+        exit 1
+    fi
+fi
+
 # Check AWS credentials
 if ! aws sts get-caller-identity &> /dev/null; then
     echo -e "${RED}Error: AWS credentials not configured properly.${NC}"

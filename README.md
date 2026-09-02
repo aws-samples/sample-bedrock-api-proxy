@@ -200,9 +200,11 @@ visit https://xxx.cloudfront.net/admin/ Admin portal to config api keys
 ### Option 2: Local Development
 
 ```bash
-# Install
+# Install (the model-mappings/ submodule holds the offline default model-mapping snapshot)
+git clone --recurse-submodules https://github.com/xiehust/sample-bedrock-api-proxy.git
+cd sample-bedrock-api-proxy   # already cloned? run: git submodule update --init
 pip install uv && uv sync
-cp .env.example .env  # configure
+cp env.example .env  # configure
 
 # Setup DynamoDB tables and create API key
 uv run scripts/setup_tables.py

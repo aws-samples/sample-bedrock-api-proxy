@@ -1,5 +1,5 @@
 """Model Mapping schemas."""
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -34,3 +34,44 @@ class ModelMappingListResponse(BaseModel):
 
     items: List[ModelMappingResponse]
     count: int
+
+
+class ModelMappingSyncRequest(BaseModel):
+    """Schema for triggering a default model mapping refresh from the remote file."""
+
+    url: Optional[str] = Field(
+        default=None, description="Override source URL (defaults to MODEL_MAPPING_SYNC_URL)"
+    )
+    dry_run: bool = Field(
+        default=False, description="Report what would change without applying"
+    )
+
+
+class ModelMappingSyncResponse(BaseModel):
+    """Schema for model mapping sync result summary."""
+
+    source_url: str
+    remote_models: int = Field(..., description="Mappings in the remote file")
+    mapping_count: int = Field(..., description="Active default mappings after merge")
+    local_overrides: int = Field(
+        0, description="DEFAULT_MODEL_MAPPING env entries layered over the remote file"
+    )
+    added: List[str] = Field(default_factory=list)
+    removed: List[str] = Field(default_factory=list)
+    changed: List[str] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+class ModelMappingSyncStatus(BaseModel):
+    """Schema for the model mapping sync status."""
+
+    enabled: bool
+    source_url: str
+    source: Literal["remote", "bundled", "env"] = Field(
+        ..., description="Where the active default mapping came from"
+    )
+    mapping_count: int
+    local_override_count: int = 0
+    last_attempt_at: Optional[float] = None
+    last_success_at: Optional[float] = None
+    last_error: Optional[str] = None
