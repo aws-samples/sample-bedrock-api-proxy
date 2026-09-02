@@ -62,3 +62,24 @@ Planned and shipped the admin-portal model speed test: Speed column on Model Map
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: OpenAI-compat: max_completion_tokens fix for gpt-5.6
+
+**Date**: 2026-09-02
+**Task**: OpenAI-compat: max_completion_tokens fix for gpt-5.6
+**Branch**: `fix/openai-compat-max-completion-tokens`
+
+### Summary
+
+Diagnosed gpt-5.6-sol speed-test 400 (unsupported_parameter max_tokens on Mantle); switched the /v1/messages OpenAI-compat converter to max_completion_tokens after verifying acceptance on gpt-5.6-sol, gpt-5.4, grok-4.3, kimi, glm, minimax, gpt-oss. Also: deployed prod DynamoDB stack (SpeedTestsTable) to unblock ECS deploy; prod page-cache confusion resolved. PR #138.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a71bdf` | (see git log) |
+
+### Status
+
+[OK] **Completed**

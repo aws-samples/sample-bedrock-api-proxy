@@ -46,7 +46,7 @@ def _make_service() -> OpenAICompatService:
         svc.request_converter.convert_request.return_value = {
             "model": "test-model",
             "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 1024,
+            "max_completion_tokens": 1024,
         }
         # Use the real response converter so we exercise create_message_start_event
         from app.converters.openai_to_anthropic import OpenAIToAnthropicConverter
