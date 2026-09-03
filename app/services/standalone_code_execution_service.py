@@ -41,6 +41,7 @@ from app.services.ptc import (
     StandaloneSandboxConfig,
     StandaloneSandboxSession,
 )
+from app.services.tool_choice_utils import relax_forced_tool_choice
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,14 @@ class StandaloneCodeExecutionService:
             # Replace code_execution marker with actual tool definitions
             standalone_tools = self._build_tools_for_request(request.tools)
 
+            # The client's tool_choice applies to the first turn only; forcing it
+            # again on continuations makes Claude re-run the tool every turn and
+            # the loop can never reach end_turn.
+            iter_tool_choice = (
+                request.tool_choice if iteration == 1
+                else relax_forced_tool_choice(request.tool_choice)
+            )
+
             # Note: MessageRequest accepts dicts via Pydantic validation
             iter_request = MessageRequest(
                 model=request.model,
@@ -298,7 +307,7 @@ class StandaloneCodeExecutionService:
                 stop_sequences=request.stop_sequences,
                 stream=False,  # Always non-streaming for standalone
                 tools=standalone_tools,
-                tool_choice=request.tool_choice,
+                tool_choice=iter_tool_choice,
                 thinking=request.thinking,
                 metadata=request.metadata,
                 output_config=request.output_config,
@@ -694,6 +703,13 @@ class StandaloneCodeExecutionService:
                 # Build request for this iteration (NON-STREAMING)
                 standalone_tools = self._build_tools_for_request(request.tools)
 
+                # See handle_request(): only the first turn honours a forcing
+                # tool_choice, otherwise the loop never terminates.
+                iter_tool_choice = (
+                    request.tool_choice if iteration == 0
+                    else relax_forced_tool_choice(request.tool_choice)
+                )
+
                 iter_request = MessageRequest(
                     model=request.model,
                     messages=messages,  # type: ignore[arg-type]
@@ -705,7 +721,7 @@ class StandaloneCodeExecutionService:
                     stop_sequences=request.stop_sequences,
                     stream=False,  # Use NON-STREAMING for reliability
                     tools=standalone_tools,
-                    tool_choice=request.tool_choice,
+                    tool_choice=iter_tool_choice,
                     thinking=request.thinking,
                     metadata=request.metadata,
                     output_config=request.output_config,
