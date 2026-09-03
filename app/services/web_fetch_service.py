@@ -38,6 +38,7 @@ from app.schemas.web_fetch import (
     WebFetchToolDefinition,
     now_iso,
 )
+from app.services.tool_choice_utils import relax_forced_tool_choice
 from app.services.web_fetch import (
     FetchProvider,
     FetchError,
@@ -905,6 +906,14 @@ class WebFetchService:
                 # Inject citation system prompt so Claude outputs [N] markers
                 augmented_system = self._inject_citation_system_prompt(request.system) if citations_enabled else request.system
 
+                # The client's tool_choice applies to the first turn only; forcing
+                # it again on continuations makes Claude re-fetch every turn and
+                # the loop can never reach end_turn.
+                iter_tool_choice = (
+                    request.tool_choice if iteration == 1
+                    else relax_forced_tool_choice(request.tool_choice)
+                )
+
                 iter_request = MessageRequest(
                     model=request.model,
                     messages=messages,  # type: ignore[arg-type]
@@ -916,7 +925,7 @@ class WebFetchService:
                     stop_sequences=request.stop_sequences,
                     stream=False,
                     tools=wf_tools,
-                    tool_choice=request.tool_choice,
+                    tool_choice=iter_tool_choice,
                     thinking=request.thinking,
                     metadata=request.metadata,
                     output_config=request.output_config,
@@ -1343,6 +1352,13 @@ class WebFetchService:
                 wf_tools = self._build_tools_for_request(request.tools, config)
                 augmented_system = self._inject_citation_system_prompt(request.system) if citations_enabled else request.system
 
+                # See handle_request(): only the first turn honours a forcing
+                # tool_choice, otherwise the loop never terminates.
+                iter_tool_choice = (
+                    request.tool_choice if iteration == 0
+                    else relax_forced_tool_choice(request.tool_choice)
+                )
+
                 iter_request = MessageRequest(
                     model=request.model,
                     messages=messages,  # type: ignore[arg-type]
@@ -1354,7 +1370,7 @@ class WebFetchService:
                     stop_sequences=request.stop_sequences,
                     stream=False,
                     tools=wf_tools,
-                    tool_choice=request.tool_choice,
+                    tool_choice=iter_tool_choice,
                     thinking=request.thinking,
                     metadata=request.metadata,
                     output_config=request.output_config,
