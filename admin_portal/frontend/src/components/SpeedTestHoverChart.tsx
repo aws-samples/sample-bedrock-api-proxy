@@ -112,6 +112,12 @@ export default function SpeedTestHoverChart({ bedrockModelId, children }: SpeedT
               <span className="text-slate-400">{t('modelMapping.speed.tokens')}: </span>
               {rec.output_tokens === null ? '—' : formatNumber(rec.output_tokens)}
             </div>
+            {rec.reasoning_tokens != null && rec.reasoning_tokens > 0 && (
+              <div className="text-white">
+                <span className="text-slate-400">{t('modelMapping.speed.hiddenReasoningTokens')}: </span>
+                {formatNumber(rec.reasoning_tokens)}
+              </div>
+            )}
             {rec.has_reasoning && (
               <div className="text-violet-300">{t('modelMapping.speed.reasoning')}</div>
             )}

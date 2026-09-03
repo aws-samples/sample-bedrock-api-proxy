@@ -92,10 +92,18 @@ class OpenAIResponsesToAnthropicConverter:
         usage_data = resp.get("usage") or {}
         input_details = usage_data.get("input_tokens_details") or {}
         cache_read = input_details.get("cached_tokens")
+        output_details = usage_data.get("output_tokens_details") or {}
+        reasoning_tokens = output_details.get("reasoning_tokens")
         usage = Usage(
             input_tokens=usage_data.get("input_tokens", 0) or 0,
             output_tokens=usage_data.get("output_tokens", 0) or 0,
             cache_read_input_tokens=cache_read,
+            reasoning_tokens=(
+                int(reasoning_tokens)
+                if isinstance(reasoning_tokens, (int, float))
+                and not isinstance(reasoning_tokens, bool)
+                else None
+            ),
         )
 
         response_id = resp.get("id") or f"msg_{uuid4().hex[:24]}"

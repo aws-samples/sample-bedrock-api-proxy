@@ -7,7 +7,7 @@ in the Anthropic Messages API format expected by clients.
 """
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.schemas.anthropic import (
     MessageResponse,
@@ -39,6 +39,23 @@ class OpenAIToAnthropicConverter:
         "500": "api_error",
         "529": "overloaded_error",
     }
+
+    @staticmethod
+    def extract_reasoning_tokens(openai_usage: Dict[str, Any]) -> Optional[int]:
+        """Return ``completion_tokens_details.reasoning_tokens`` if reported.
+
+        Mantle reports reasoning tokens for gpt-5.x inside ``completion_tokens``
+        but does not stream the reasoning itself; surfacing the breakdown lets
+        clients (and the admin speed test) tell hidden reasoning from visible
+        output. ``None`` when the upstream gives no breakdown.
+        """
+        details = openai_usage.get("completion_tokens_details")
+        if not isinstance(details, dict):
+            return None
+        value = details.get("reasoning_tokens")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return int(value)
 
     def convert_response(
         self, openai_response: Dict[str, Any], model: str, message_id: str
@@ -102,6 +119,7 @@ class OpenAIToAnthropicConverter:
         usage = Usage(
             input_tokens=openai_usage.get("prompt_tokens", 0),
             output_tokens=openai_usage.get("completion_tokens", 0),
+            reasoning_tokens=self.extract_reasoning_tokens(openai_usage),
         )
 
         return MessageResponse(

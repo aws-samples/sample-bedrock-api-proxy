@@ -625,9 +625,12 @@ class OpenAICompatService:
                     }
                     event_queue.put(("event", self._format_sse_event(thinking_delta)))
 
-                # Handle text content delta
+                # Handle text content delta. Skip empty strings: the upstream
+                # role chunk carries ``content: ""`` and the Anthropic API never
+                # emits an empty text_delta (nor an empty text block, which the
+                # API would reject if a client replayed it as input).
                 text_content = delta.get("content")
-                if text_content is not None:
+                if text_content:
                     total_text_len += len(text_content)
 
                     if not text_block_started:
@@ -798,13 +801,21 @@ class OpenAICompatService:
 
             # Always emit message_delta + message_stop so the SSE stream has a
             # proper Anthropic-format terminator.
+            message_delta_usage: Dict[str, Any] = {
+                "input_tokens": final_usage.get("prompt_tokens", 0),
+                "output_tokens": final_usage.get("completion_tokens", 0),
+            }
+            reasoning_tokens = self.response_converter.extract_reasoning_tokens(
+                final_usage
+            )
+            if reasoning_tokens is not None:
+                # Proxy extension: hidden reasoning already counted in
+                # output_tokens (see schemas.anthropic.Usage.reasoning_tokens).
+                message_delta_usage["reasoning_tokens"] = reasoning_tokens
             message_delta = {
                 "type": "message_delta",
                 "delta": {"stop_reason": final_stop_reason, "stop_sequence": None},
-                "usage": {
-                    "input_tokens": final_usage.get("prompt_tokens", 0),
-                    "output_tokens": final_usage.get("completion_tokens", 0),
-                },
+                "usage": message_delta_usage,
             }
             event_queue.put(("event", self._format_sse_event(message_delta)))
 

@@ -59,7 +59,9 @@ export interface SpeedTestRecord {
   ttft_ms: number | null;
   total_ms: number | null;
   output_tokens: number | null;
-  /** Output tokens per second (excluding TTFT), null when not computable. */
+  /** Hidden reasoning tokens counted in output_tokens (OpenAI-compat models); null when not reported. */
+  reasoning_tokens?: number | null;
+  /** Streamed tokens per second (excluding TTFT and hidden reasoning), null when not computable. */
   otps: number | null;
   has_reasoning: boolean;
   error: string | null;

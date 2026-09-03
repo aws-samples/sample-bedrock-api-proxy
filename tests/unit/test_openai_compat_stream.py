@@ -112,15 +112,17 @@ def _types(events: list[dict[str, Any]]) -> list[str]:
     return out
 
 
-def _usage_chunk(prompt: int = 10, completion: int = 20) -> dict[str, Any]:
-    return {
-        "choices": [],
-        "usage": {
-            "prompt_tokens": prompt,
-            "completion_tokens": completion,
-            "total_tokens": prompt + completion,
-        },
+def _usage_chunk(
+    prompt: int = 10, completion: int = 20, reasoning: int | None = None
+) -> dict[str, Any]:
+    usage: dict[str, Any] = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
     }
+    if reasoning is not None:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning}
+    return {"choices": [], "usage": usage}
 
 
 def _chunk(
@@ -171,6 +173,90 @@ def test_text_only_stream_emits_wellformed_sequence():
     assert msg_delta["delta"]["stop_reason"] == "end_turn"
     assert msg_delta["usage"]["input_tokens"] == 5
     assert msg_delta["usage"]["output_tokens"] == 2
+    # No breakdown from upstream -> the proxy extension is omitted, not zeroed
+    assert "reasoning_tokens" not in msg_delta["usage"]
+
+
+def test_message_delta_exposes_hidden_reasoning_tokens():
+    """Mantle gpt-5.x: reasoning is counted in completion_tokens but never
+    streamed. Surface completion_tokens_details.reasoning_tokens as the
+    ``usage.reasoning_tokens`` proxy extension so clients can tell them apart."""
+    events = _run_worker(
+        [
+            _chunk(content="Hello"),
+            _chunk(finish_reason="stop"),
+            _usage_chunk(prompt=26, completion=595, reasoning=395),
+        ]
+    )
+    msg_delta = next(e for e in events if e.get("type") == "message_delta")
+    assert msg_delta["usage"] == {
+        "input_tokens": 26,
+        "output_tokens": 595,
+        "reasoning_tokens": 395,
+    }
+
+
+def test_non_streaming_convert_response_maps_reasoning_tokens():
+    from app.converters.openai_to_anthropic import OpenAIToAnthropicConverter
+
+    conv = OpenAIToAnthropicConverter()
+    resp = {
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 40,
+            "completion_tokens_details": {"reasoning_tokens": 30},
+        },
+    }
+    out = conv.convert_response(resp, model="m", message_id="msg_1")
+    assert out.usage.output_tokens == 40
+    assert out.usage.reasoning_tokens == 30
+    # Malformed / absent breakdowns never raise and yield None
+    assert conv.extract_reasoning_tokens({}) is None
+    assert conv.extract_reasoning_tokens({"completion_tokens_details": None}) is None
+    assert conv.extract_reasoning_tokens({"completion_tokens_details": {"reasoning_tokens": "x"}}) is None
+
+
+def test_empty_content_chunk_does_not_emit_text_block_or_delta():
+    """Upstream role chunk carries ``content: ""``; hidden-reasoning models that
+    exhaust max_tokens send nothing else. No empty text block/delta must be
+    emitted (it skewed speed-test TTFT and is invalid as replayed input)."""
+    events = _run_worker(
+        [
+            _chunk(content=""),
+            _chunk(finish_reason="length"),
+            _usage_chunk(prompt=26, completion=200),
+        ]
+    )
+
+    assert _types(events) == [
+        "message_start",
+        "message_delta",
+        "message_stop",
+        "__done__",
+    ]
+    msg_delta = next(e for e in events if e.get("type") == "message_delta")
+    assert msg_delta["delta"]["stop_reason"] == "max_tokens"
+
+
+def test_empty_content_chunk_before_text_is_ignored():
+    events = _run_worker(
+        [
+            _chunk(content=""),
+            _chunk(content="Hello"),
+            _chunk(finish_reason="stop"),
+            _usage_chunk(),
+        ]
+    )
+    assert _types(events) == [
+        "message_start",
+        "start:text",
+        "delta:text_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+        "__done__",
+    ]
 
 
 def test_thinking_to_tool_use_closes_thinking_block():

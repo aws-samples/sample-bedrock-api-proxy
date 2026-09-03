@@ -264,9 +264,13 @@ class Settings(BaseSettings):
                     "tests (behind CloudFront use the https:// distribution URL)",
     )
     speed_test_max_tokens: int = Field(
-        default=200,
+        default=600,
         alias="SPEED_TEST_MAX_TOKENS",
-        description="max_tokens sent with each speed-test request",
+        description=(
+            "max_tokens sent with each speed-test request. Must leave room for "
+            "hidden reasoning (gpt-5.x on Mantle counts it in output_tokens but "
+            "does not stream it) plus the ~200-token prose answer."
+        ),
     )
     speed_test_timeout_seconds: int = Field(
         default=90,

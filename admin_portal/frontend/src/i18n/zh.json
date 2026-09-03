@@ -293,6 +293,7 @@
       "ttft": "首token延迟",
       "otps": "输出速度",
       "tokens": "输出 token",
+      "hiddenReasoningTokens": "隐藏推理 token（不计入速度）",
       "reasoning": "含推理",
       "failed": "失败",
       "hoverTitle": "最近 10 次测速",

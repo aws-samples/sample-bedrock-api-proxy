@@ -54,10 +54,35 @@ class StreamMetrics:
     total_ms: float
     output_tokens: int | None
     has_reasoning: bool
+    reasoning_tokens: int | None = None
+
+    @property
+    def streamed_tokens(self) -> int | None:
+        """Tokens that actually crossed the wire during the timed window.
+
+        ``output_tokens`` includes reasoning. When the model streamed its
+        reasoning (``has_reasoning``) those tokens were delivered inside the
+        window and count. When it did not (gpt-5.x on Mantle reports
+        ``reasoning_tokens`` but never streams them) they were generated
+        *before* the first delta and must be excluded, or OTPS is inflated.
+        """
+        return streamed_output_tokens(
+            self.output_tokens, self.reasoning_tokens, self.has_reasoning
+        )
 
     @property
     def otps(self) -> float | None:
-        return compute_otps(self.output_tokens, self.ttft_ms, self.total_ms)
+        return compute_otps(self.streamed_tokens, self.ttft_ms, self.total_ms)
+
+
+def streamed_output_tokens(
+    output_tokens: int | None, reasoning_tokens: int | None, has_reasoning: bool
+) -> int | None:
+    if output_tokens is None:
+        return None
+    if has_reasoning or not reasoning_tokens:
+        return output_tokens
+    return max(output_tokens - reasoning_tokens, 0)
 
 
 def compute_otps(
@@ -85,7 +110,9 @@ class SseTimer:
         self._first_delta_at: float | None = None
         self._stop_at: float | None = None
         self.output_tokens: int | None = None
+        self.reasoning_tokens: int | None = None
         self.has_reasoning = False
+        self.delta_count = 0
 
     def feed(self, line: str) -> bool:
         """Consume one SSE line. Returns True once ``message_stop`` was seen."""
@@ -103,16 +130,38 @@ class SseTimer:
 
         event_type = event.get("type")
         if event_type == "content_block_delta":
+            delta = event.get("delta") or {}
+            if not isinstance(delta, dict):
+                return False
+            self.delta_count += 1
+            # Only a delta that carries content counts as "first token". The
+            # OpenAI-compat path emits an empty ``text_delta`` for the upstream
+            # role chunk; hidden-reasoning models (gpt-5.x on Mantle) that spend
+            # the whole max_tokens budget on reasoning produce *only* that empty
+            # delta, and message_stop follows a few ms later — which used to
+            # yield TTFT == total and OTPS in the tens of thousands.
+            payload = (
+                delta.get("text")
+                or delta.get("thinking")
+                or delta.get("partial_json")
+                or ""
+            )
+            if not payload:
+                return False
             if self._first_delta_at is None:
                 self._first_delta_at = self._clock()
-            delta = event.get("delta") or {}
-            if isinstance(delta, dict) and delta.get("type") == "thinking_delta":
+            if delta.get("type") == "thinking_delta":
                 self.has_reasoning = True
         elif event_type == "message_delta":
             usage = event.get("usage") or {}
             tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
             if isinstance(tokens, (int, float)):
                 self.output_tokens = int(tokens)
+            reasoning = (
+                usage.get("reasoning_tokens") if isinstance(usage, dict) else None
+            )
+            if isinstance(reasoning, (int, float)) and not isinstance(reasoning, bool):
+                self.reasoning_tokens = int(reasoning)
         elif event_type == "message_stop":
             self._stop_at = self._clock()
             return True
@@ -125,12 +174,18 @@ class SseTimer:
     def finish(self) -> StreamMetrics:
         stop_at = self._stop_at if self._stop_at is not None else self._clock()
         if self._first_delta_at is None:
+            if self.delta_count:
+                raise SpeedTestError(
+                    "no visible output: model returned only empty deltas "
+                    "(max_tokens likely exhausted by hidden reasoning)"
+                )
             raise SpeedTestError("no content_block_delta received")
         return StreamMetrics(
             ttft_ms=round((self._first_delta_at - self._t0) * 1000.0, 1),
             total_ms=round((stop_at - self._t0) * 1000.0, 1),
             output_tokens=self.output_tokens,
             has_reasoning=self.has_reasoning,
+            reasoning_tokens=self.reasoning_tokens,
         )
 
 
@@ -260,6 +315,7 @@ def _new_record(bedrock_model_id: str, base_url: str) -> dict[str, Any]:
         "ttft_ms": None,
         "total_ms": None,
         "output_tokens": None,
+        "reasoning_tokens": None,
         "otps": None,
         "has_reasoning": False,
         "error": None,
@@ -309,6 +365,7 @@ async def run_speed_test(bedrock_model_id: str) -> dict[str, Any]:
             ttft_ms=metrics.ttft_ms,
             total_ms=metrics.total_ms,
             output_tokens=metrics.output_tokens,
+            reasoning_tokens=metrics.reasoning_tokens,
             otps=metrics.otps,
             has_reasoning=metrics.has_reasoning,
         )

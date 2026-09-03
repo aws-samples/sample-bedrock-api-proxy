@@ -138,6 +138,67 @@ def test_parse_stream_no_delta_raises():
         parse_stream(lines, t0=0.0, clock=FakeClock())
 
 
+def _empty_text_delta() -> list:
+    # What the OpenAI-compat path emits for the upstream role chunk (content="").
+    return sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": ""},
+        },
+    )
+
+
+def test_parse_stream_empty_delta_does_not_start_ttft():
+    """Hidden-reasoning model: empty role-chunk delta, then real text later."""
+    from admin_portal.backend.services.speed_test import parse_stream
+
+    clock = FakeClock(start=100.0, step=1.0)
+    lines = (
+        sse("message_start", {"type": "message_start"})
+        + sse("content_block_start", {"type": "content_block_start", "index": 0})
+        + _empty_text_delta()
+        + sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Rivers"},
+            },
+        )
+        + sse(
+            "message_delta",
+            {"type": "message_delta", "usage": {"output_tokens": 200}},
+        )
+        + sse("message_stop", {"type": "message_stop"})
+    )
+    m = parse_stream(lines, t0=99.0, clock=clock)
+    # The empty delta must not consume a clock tick: first tick is "Rivers".
+    assert m.ttft_ms == 1000.0
+    assert m.total_ms == 2000.0
+    assert m.otps == 200.0
+
+
+def test_parse_stream_only_empty_deltas_is_an_error_not_a_bogus_otps():
+    """gpt-5.6 spending all of max_tokens on reasoning -> no visible output."""
+    from admin_portal.backend.services.speed_test import SpeedTestError, parse_stream
+
+    lines = (
+        sse("message_start", {"type": "message_start"})
+        + sse("content_block_start", {"type": "content_block_start", "index": 0})
+        + _empty_text_delta()
+        + sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+        + sse(
+            "message_delta",
+            {"type": "message_delta", "usage": {"output_tokens": 200}},
+        )
+        + sse("message_stop", {"type": "message_stop"})
+    )
+    with pytest.raises(SpeedTestError, match="no visible output"):
+        parse_stream(lines, t0=0.0, clock=FakeClock())
+
+
 def test_parse_stream_missing_usage_gives_no_otps():
     from admin_portal.backend.services.speed_test import parse_stream
 
@@ -179,6 +240,55 @@ def test_compute_otps_edge_cases():
     assert compute_otps(10, 200.0, 200.0) is None
     assert compute_otps(10, 300.0, 200.0) is None
     assert compute_otps(10, 100.0, 1100.0) == 10.0
+
+
+def test_streamed_output_tokens_excludes_hidden_reasoning_only():
+    from admin_portal.backend.services.speed_test import streamed_output_tokens
+
+    assert streamed_output_tokens(None, 50, False) is None
+    # No breakdown reported -> everything counts
+    assert streamed_output_tokens(300, None, False) == 300
+    assert streamed_output_tokens(300, 0, False) == 300
+    # Hidden reasoning (not streamed) -> excluded
+    assert streamed_output_tokens(300, 200, False) == 100
+    # Streamed thinking (has_reasoning) -> reasoning tokens crossed the wire, count them
+    assert streamed_output_tokens(300, 200, True) == 300
+    # Never negative on inconsistent upstream numbers
+    assert streamed_output_tokens(100, 150, False) == 0
+
+
+def test_parse_stream_hidden_reasoning_tokens_are_excluded_from_otps():
+    """gpt-5.x on Mantle: no thinking_delta, but message_delta.usage carries
+    reasoning_tokens (proxy extension). OTPS must use visible tokens only."""
+    from admin_portal.backend.services.speed_test import parse_stream
+
+    lines = (
+        sse("message_start", {"type": "message_start"})
+        + sse("content_block_start", {"type": "content_block_start", "index": 0})
+        + sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Rivers"},
+            },
+        )
+        + sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "usage": {"output_tokens": 595, "reasoning_tokens": 395},
+            },
+        )
+        + sse("message_stop", {"type": "message_stop"})
+    )
+    clock = FakeClock(start=100.0, step=1.0)
+    m = parse_stream(lines, t0=99.0, clock=clock)
+    assert m.output_tokens == 595
+    assert m.reasoning_tokens == 395
+    assert m.has_reasoning is False
+    assert m.streamed_tokens == 200
+    assert m.otps == 200.0  # 200 tokens over a 1 s window, not 595
 
 
 # --------------------------------------------------------------------------- fixtures

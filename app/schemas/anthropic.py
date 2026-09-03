@@ -525,6 +525,11 @@ class Usage(BaseModel):
     output_tokens: int
     cache_creation_input_tokens: Optional[int] = None
     cache_read_input_tokens: Optional[int] = None
+    # Proxy extension (not in the Anthropic API): reasoning tokens that the
+    # upstream already counted in ``output_tokens`` but did not stream as
+    # content (OpenAI-compat models such as gpt-5.x on Bedrock Mantle).
+    # None when the upstream does not report a breakdown.
+    reasoning_tokens: Optional[int] = None
     iterations: Optional[List[Dict[str, Any]]] = None
     server_tool_use: Optional[Dict[str, Any]] = None  # e.g., {"web_search_requests": 3}
 

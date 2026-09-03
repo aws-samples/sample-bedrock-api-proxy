@@ -94,7 +94,14 @@ class SpeedTestRecord(BaseModel):
     ttft_ms: Optional[float] = Field(None, description="Request send -> first content_block_delta")
     total_ms: Optional[float] = Field(None, description="Request send -> message_stop / stream end")
     output_tokens: Optional[int] = None
-    otps: Optional[float] = Field(None, description="output_tokens / ((total_ms - ttft_ms) / 1000)")
+    reasoning_tokens: Optional[int] = Field(
+        None,
+        description="usage.reasoning_tokens from message_delta (hidden reasoning counted in output_tokens)",
+    )
+    otps: Optional[float] = Field(
+        None,
+        description="streamed tokens / ((total_ms - ttft_ms) / 1000); hidden reasoning_tokens excluded",
+    )
     has_reasoning: bool = False
     error: Optional[str] = None
     proxy_base_url: str

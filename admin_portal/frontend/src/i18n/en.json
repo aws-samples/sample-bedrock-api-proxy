@@ -293,6 +293,7 @@
       "ttft": "TTFT",
       "otps": "Output speed",
       "tokens": "Output tokens",
+      "hiddenReasoningTokens": "Hidden reasoning tokens (excluded from speed)",
       "reasoning": "reasoning",
       "failed": "Failed",
       "hoverTitle": "Last 10 speed tests",

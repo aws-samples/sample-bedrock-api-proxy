@@ -251,7 +251,9 @@ async def get_api_key_info(request: Request) -> dict:
         request: HTTP request
 
     Returns:
-        API key information dictionary
+        API key information dictionary. When ``REQUIRE_API_KEY=False`` the
+        middleware stores ``None``; this returns ``{}`` so handlers can call
+        ``.get`` unconditionally while ``if api_key_info`` stays falsy.
 
     Raises:
         HTTPException: If not authenticated
@@ -265,4 +267,4 @@ async def get_api_key_info(request: Request) -> dict:
             },
         )
 
-    return request.state.api_key_info
+    return request.state.api_key_info or {}

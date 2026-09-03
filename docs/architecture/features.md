@@ -544,12 +544,13 @@ The Model Mapping page of the admin portal has a **Speed** column with a per-row
 
 | Field | Definition |
 |---|---|
-| `ttft_ms` | Time from request send to the first `content_block_delta` of any type (`thinking_delta` or `text_delta`) |
+| `ttft_ms` | Time from request send to the first **non-empty** `content_block_delta` of any type (`thinking_delta`, `text_delta` or `input_json_delta`). Empty deltas are ignored |
 | `total_ms` | Time from request send to `message_stop` (or stream close) |
-| `output_tokens` | `usage.output_tokens` from `message_delta`; includes reasoning/thinking tokens when the model emits them |
-| `otps` | `output_tokens / ((total_ms - ttft_ms) / 1000)`; `null` if the denominator is <= 0 or no tokens were reported |
+| `output_tokens` | `usage.output_tokens` from `message_delta`; includes reasoning/thinking tokens whether or not the model streamed them |
+| `reasoning_tokens` | `usage.reasoning_tokens` from `message_delta` (proxy extension, set on the OpenAI-compat path from `completion_tokens_details.reasoning_tokens`); `null` when the upstream gives no breakdown |
+| `otps` | `streamed_tokens / ((total_ms - ttft_ms) / 1000)` where `streamed_tokens = output_tokens` if thinking was streamed (`has_reasoning`) or no `reasoning_tokens` were reported, else `output_tokens - reasoning_tokens` (hidden reasoning happened before the first delta and would inflate the rate); `null` if the denominator is <= 0 or no tokens were reported |
 | `has_reasoning` | `true` if any `thinking_delta` was seen |
-| `status` / `error` | `ok`, or `error` with the proxy/transport error message (non-2xx, timeout, malformed stream, no delta) |
+| `status` / `error` | `ok`, or `error` with the proxy/transport error message (non-2xx, timeout, malformed stream, no delta, or only empty deltas — i.e. `max_tokens` exhausted by hidden reasoning) |
 
 No `thinking` config is sent, so models that think by default (Fable 5.x, Opus 5, Sonnet 5 adaptive mode) may include some thinking time in TTFT; `has_reasoning` marks runs that emitted thinking deltas. Models that reason internally without exposing it (e.g. some Mantle models) will still show a large TTFT with `has_reasoning=false`; that is recorded as-is because it is what clients experience. Failed runs are stored too, so the history shows them.
 
@@ -572,7 +573,7 @@ Results live in the `anthropic-proxy-speed-tests` DynamoDB table (PK `bedrock_mo
 ```bash
 PROXY_BASE_URL=http://localhost:8000          # proxy the admin portal tests against (CDK sets CloudFront/ALB URL)
 DYNAMODB_SPEED_TESTS_TABLE=anthropic-proxy-speed-tests
-SPEED_TEST_MAX_TOKENS=200
+SPEED_TEST_MAX_TOKENS=600                     # must cover hidden reasoning (gpt-5.x) + the ~200-token answer
 SPEED_TEST_TIMEOUT_SECONDS=90
 ```
 

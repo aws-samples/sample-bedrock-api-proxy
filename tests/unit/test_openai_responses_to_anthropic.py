@@ -90,6 +90,7 @@ def test_usage_mapping():
     assert result.usage.input_tokens == 100
     assert result.usage.output_tokens == 50
     assert result.usage.cache_read_input_tokens == 30
+    assert result.usage.reasoning_tokens == 12
 
 
 def test_usage_missing_fields_default_to_zero():
@@ -100,6 +101,7 @@ def test_usage_missing_fields_default_to_zero():
     assert result.usage.input_tokens == 0
     assert result.usage.output_tokens == 0
     assert result.usage.cache_read_input_tokens is None
+    assert result.usage.reasoning_tokens is None
 
 
 def test_mixed_reasoning_function_call_and_message():
