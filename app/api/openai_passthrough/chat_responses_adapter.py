@@ -119,12 +119,24 @@ def reset_unsupported_param_cache_for_testing() -> None:
     _unsupported_param_cache.clear()
 
 
-# bedrock-mantle implements only two Responses-API tool variants. Everything
-# else in the OpenAI spec (custom, namespace, web_search, code_interpreter,
-# file_search, image_generation, computer_use_preview, local_shell, ...) is
-# rejected at deserialization time, failing the entire request. Verified by
-# probing the upstream directly.
-_MANTLE_SUPPORTED_TOOL_TYPES = frozenset({"function", "mcp"})
+# Which Responses-API tool variants mantle implements depends on the model
+# family, the same split that decides the base path (see upstream_url).
+#
+# The open-weight gpt-oss models (served from /v1) still take only `function`
+# and `mcp`; everything else in the OpenAI spec is rejected at deserialization
+# time, failing the entire request.
+#
+# The GPT-5.x/6 family (served from /openai/v1) has since gained `custom`,
+# `namespace` and `web_search` — including real server-side search, which comes
+# back as a `web_search_call` item with url annotations. Rewriting those now
+# does damage rather than preventing it: a flattened `<namespace>.<tool>` name
+# is not routable by the client that sent the namespace (the Codex CLI keys its
+# router on the separate `namespace` field), so every MCP tool call fails with
+# "unsupported call". Verified by probing both families upstream.
+_MANTLE_TOOL_TYPES_GPT_OSS = frozenset({"function", "mcp"})
+_MANTLE_TOOL_TYPES_GPT5 = frozenset(
+    {"function", "mcp", "custom", "namespace", "web_search", "web_search_preview"}
+)
 
 # A `custom` tool takes free-form text rather than JSON arguments. The closest
 # function equivalent is one string parameter, and OpenAI's native custom tool
@@ -157,6 +169,15 @@ _MANTLE_SUPPORTED_INPUT_TYPES = frozenset({
     "item_reference",
 })
 
+# The GPT-5.x/6 family additionally replays what its own extra tool variants
+# produce: the echo of a `custom` tool and of a server-side search. Verified
+# upstream — a turn carrying these items back is accepted and answered.
+_MANTLE_EXTRA_INPUT_TYPES_GPT5 = frozenset({
+    "custom_tool_call",
+    "custom_tool_call_output",
+    "web_search_call",
+})
+
 # Reasoning-effort support differs per model family, so clamping has to be
 # model-aware — a blanket clamp throws away capability the caller paid for.
 #
@@ -184,9 +205,15 @@ _GPT_OSS_EFFORT_CLAMP = {
 }
 
 
+def is_gpt_oss_model(model: str | None) -> bool:
+    """True for the open-weight family, which mantle serves from the plain /v1
+    path with a narrower request surface than the GPT-5.x/6 models."""
+    return isinstance(model, str) and model.startswith("openai.gpt-oss")
+
+
 def _effort_rules(model: str | None) -> tuple[tuple[str, ...], dict[str, str]]:
     """Pick the (supported, clamp) pair for this model family."""
-    if isinstance(model, str) and model.startswith("openai.gpt-oss"):
+    if is_gpt_oss_model(model):
         return _GPT_OSS_EFFORTS, _GPT_OSS_EFFORT_CLAMP
     return _GPT5_EFFORTS, _GPT5_EFFORT_CLAMP
 
@@ -253,6 +280,11 @@ def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
     if not isinstance(tools, list):
         return []
 
+    supported_types = (
+        _MANTLE_TOOL_TYPES_GPT_OSS
+        if is_gpt_oss_model(body.get("model"))
+        else _MANTLE_TOOL_TYPES_GPT5
+    )
     rewritten: list[str] = []
     result: list[Any] = []
 
@@ -262,7 +294,7 @@ def downgrade_unsupported_tools(body: dict[str, Any]) -> list[str]:
             continue
 
         tool_type = tool.get("type")
-        if tool_type in _MANTLE_SUPPORTED_TOOL_TYPES:
+        if tool_type in supported_types:
             result.append(tool)
             continue
 
@@ -526,6 +558,15 @@ def sanitize_input_items(body: dict[str, Any]) -> list[str]:
     if not isinstance(items, list):
         return []
 
+    # Both rewrites below exist only to compensate for tool variants this model
+    # family cannot take. Where the family serves `custom` and `web_search`
+    # itself, the history it produced must be replayed verbatim — rewriting it
+    # would misreport the client's own turns.
+    gpt_oss = is_gpt_oss_model(body.get("model"))
+    supported_input_types = _MANTLE_SUPPORTED_INPUT_TYPES
+    if not gpt_oss:
+        supported_input_types = supported_input_types | _MANTLE_EXTRA_INPUT_TYPES_GPT5
+
     notes: list[str] = []
     result: list[Any] = []
 
@@ -540,7 +581,9 @@ def sanitize_input_items(body: dict[str, Any]) -> list[str]:
             result.append(item)
             continue
 
-        replacement_type = _CUSTOM_CALL_TO_FUNCTION_CALL.get(item_type)
+        replacement_type = (
+            _CUSTOM_CALL_TO_FUNCTION_CALL.get(item_type) if gpt_oss else None
+        )
         if replacement_type is not None:
             converted = {
                 key: value for key, value in item.items() if key != "input"
@@ -560,7 +603,7 @@ def sanitize_input_items(body: dict[str, Any]) -> list[str]:
             notes.append(f"{item_type}->{replacement_type}")
             continue
 
-        if item_type not in _MANTLE_SUPPORTED_INPUT_TYPES:
+        if item_type not in supported_input_types:
             notes.append(f"dropped {item_type}")
             continue
 

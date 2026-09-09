@@ -8,6 +8,11 @@ from app.api.openai_passthrough.chat_responses_adapter import (
     downgrade_unsupported_tools,
 )
 
+# Every rewrite below exists for the open-weight family, the only one whose
+# request surface is still limited to `function` and `mcp`.
+GPT_OSS = "openai.gpt-oss-120b"
+GPT5 = "openai.gpt-5.6-sol"
+
 
 def _names(body):
     return [t.get("name") for t in body["tools"]]
@@ -15,7 +20,7 @@ def _names(body):
 
 class TestCustomTool:
     def test_becomes_function_with_input_string(self):
-        body = {"tools": [
+        body = {"model": GPT_OSS, "tools": [
             {"type": "custom", "name": "apply_patch", "description": "Apply a patch"}
         ]}
         assert downgrade_unsupported_tools(body) == ["apply_patch"]
@@ -30,7 +35,7 @@ class TestCustomTool:
 
     def test_format_field_dropped(self):
         """`format` is custom-only and meaningless on a function tool."""
-        body = {"tools": [
+        body = {"model": GPT_OSS, "tools": [
             {"type": "custom", "name": "t",
              "format": {"type": "grammar", "syntax": "lark"}}
         ]}
@@ -38,14 +43,14 @@ class TestCustomTool:
         assert "format" not in body["tools"][0]
 
     def test_no_description_omits_key(self):
-        body = {"tools": [{"type": "custom", "name": "t"}]}
+        body = {"model": GPT_OSS, "tools": [{"type": "custom", "name": "t"}]}
         downgrade_unsupported_tools(body)
         assert "description" not in body["tools"][0]
 
 
 class TestNamespaceTool:
     def test_nested_tools_flattened_with_dotted_names(self):
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "namespace", "name": "browser", "description": "browser tools",
             "tools": [
                 {"type": "function", "name": "open",
@@ -64,7 +69,7 @@ class TestNamespaceTool:
         assert body["tools"][1]["parameters"]["properties"]["id"]["type"] == "integer"
 
     def test_nested_tool_inherits_namespace_description(self):
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "namespace", "name": "ns", "description": "group desc",
             "tools": [{"type": "function", "name": "a",
                        "parameters": {"type": "object"}}],
@@ -73,7 +78,7 @@ class TestNamespaceTool:
         assert body["tools"][0]["description"] == "group desc"
 
     def test_nested_own_description_wins(self):
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "namespace", "name": "ns", "description": "group",
             "tools": [{"type": "function", "name": "a", "description": "own",
                        "parameters": {"type": "object"}}],
@@ -82,7 +87,7 @@ class TestNamespaceTool:
         assert body["tools"][0]["description"] == "own"
 
     def test_nested_without_parameters_gets_input_schema(self):
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "namespace", "name": "ns",
             "tools": [{"type": "function", "name": "a"}],
         }]}
@@ -91,13 +96,13 @@ class TestNamespaceTool:
 
     def test_empty_namespace_dropped(self):
         """Nothing callable inside; forwarding it would reject the whole array."""
-        body = {"tools": [{"type": "namespace", "name": "ns", "tools": []},
+        body = {"model": GPT_OSS, "tools": [{"type": "namespace", "name": "ns", "tools": []},
                           {"type": "function", "name": "keep"}]}
         assert downgrade_unsupported_tools(body) == ["ns"]
         assert _names(body) == ["keep"]
 
     def test_malformed_nested_entries_skipped(self):
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "namespace", "name": "ns",
             "tools": ["junk", 42, None, {"no_name": True},
                       {"type": "function", "name": "ok"}],
@@ -109,7 +114,7 @@ class TestNamespaceTool:
 class TestOtherVariants:
     def test_unknown_variant_keeps_declared_parameters(self):
         """e.g. web_search / local_shell — preserve the client's schema."""
-        body = {"tools": [{
+        body = {"model": GPT_OSS, "tools": [{
             "type": "local_shell", "name": "shell",
             "parameters": {"type": "object",
                            "properties": {"cmd": {"type": "string"}}},
@@ -120,7 +125,7 @@ class TestOtherVariants:
         assert tool["parameters"]["properties"]["cmd"]["type"] == "string"
 
     def test_unknown_variant_without_parameters_gets_input_schema(self):
-        body = {"tools": [{"type": "web_search", "name": "search"}]}
+        body = {"model": GPT_OSS, "tools": [{"type": "web_search", "name": "search"}]}
         assert downgrade_unsupported_tools(body) == ["search"]
         assert body["tools"][0]["parameters"]["required"] == ["input"]
 
@@ -131,12 +136,12 @@ class TestPreservation:
             {"type": "function", "name": "f", "parameters": {"type": "object"}},
             {"type": "mcp", "server_label": "s", "connector_id": "c"},
         ]
-        body = {"tools": [dict(t) for t in original]}
+        body = {"model": GPT_OSS, "tools": [dict(t) for t in original]}
         assert downgrade_unsupported_tools(body) == []
         assert body["tools"] == original
 
     def test_mixed_list_order_preserved(self):
-        body = {"tools": [
+        body = {"model": GPT_OSS, "tools": [
             {"type": "function", "name": "first"},
             {"type": "custom", "name": "second"},
             {"type": "mcp", "server_label": "third"},
@@ -147,7 +152,7 @@ class TestPreservation:
 
     def test_variant_without_name_left_alone(self):
         """No callable name to preserve — let the upstream error surface."""
-        body = {"tools": [{"type": "custom", "description": "no name"}]}
+        body = {"model": GPT_OSS, "tools": [{"type": "custom", "description": "no name"}]}
         assert downgrade_unsupported_tools(body) == []
         assert body["tools"][0]["type"] == "custom"
 
@@ -157,7 +162,7 @@ class TestPreservation:
             assert downgrade_unsupported_tools(body) == []
 
     def test_body_untouched_when_nothing_rewritten(self):
-        body = {"tools": [{"type": "function", "name": "f"}]}
+        body = {"model": GPT_OSS, "tools": [{"type": "function", "name": "f"}]}
         before = body["tools"]
         downgrade_unsupported_tools(body)
         assert body["tools"] is before
@@ -205,3 +210,37 @@ class TestPerModelBasePath:
                            base_url="https://custom.example/api",
                            model="openai.gpt-5.6-sol")
         assert url == "https://custom.example/api/responses"
+
+
+class TestGpt5FamilyKeepsNativeVariants:
+    """The GPT-5.x/6 models serve custom, namespace and web_search themselves.
+
+    Rewriting them there is not a harmless precaution: a namespace flattened to
+    `<ns>.<tool>` is unroutable by the client that sent it, because the client
+    keys its router on the separate `namespace` field.
+    """
+
+    def test_custom_namespace_and_web_search_pass_through(self):
+        tools = [
+            {"type": "custom", "name": "apply_patch"},
+            {
+                "type": "namespace",
+                "name": "mcp__search",
+                "tools": [{"type": "function", "name": "web_search"}],
+            },
+            {"type": "web_search"},
+            {"type": "function", "name": "shell"},
+        ]
+        body = {"model": GPT5, "tools": [dict(t) for t in tools]}
+        assert downgrade_unsupported_tools(body) == []
+        assert body["tools"] == tools
+
+    def test_unknown_variant_still_downgraded(self):
+        """Only the verified-supported variants are exempt."""
+        body = {"model": GPT5, "tools": [{"type": "file_search", "name": "fs"}]}
+        assert downgrade_unsupported_tools(body) == ["fs"]
+        assert body["tools"][0]["type"] == "function"
+
+    def test_missing_model_treated_as_gpt5(self):
+        body = {"tools": [{"type": "custom", "name": "apply_patch"}]}
+        assert downgrade_unsupported_tools(body) == []

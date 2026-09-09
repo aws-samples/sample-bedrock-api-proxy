@@ -9,6 +9,7 @@ from app.api.openai_passthrough.web_search import (
     OpenAIResponsesWebSearchError,
     build_message_request,
     build_response_json,
+    drop_web_search_tools,
     extract_web_search_options,
     is_responses_web_search_request,
     stream_response_events,
@@ -54,6 +55,28 @@ def test_is_responses_web_search_request_detects_current_and_preview_tools():
         {"tools": [{"type": "function", "name": "x"}]}
     )
     assert not is_responses_web_search_request({"input": "hi"})
+
+
+def test_drop_web_search_tools_keeps_the_other_tools():
+    """Codex attaches web_search to every request; refusing it would disable
+    apply_patch and every other tool along with it."""
+    body = {
+        "tools": [
+            {"type": "web_search"},
+            {"type": "function", "name": "apply_patch"},
+            {"type": "web_search_preview"},
+        ]
+    }
+    assert drop_web_search_tools(body) == 2
+    assert body["tools"] == [{"type": "function", "name": "apply_patch"}]
+    assert not is_responses_web_search_request(body)
+
+
+def test_drop_web_search_tools_no_op_without_search_tools():
+    body = {"tools": [{"type": "function", "name": "apply_patch"}]}
+    assert drop_web_search_tools(body) == 0
+    assert body["tools"] == [{"type": "function", "name": "apply_patch"}]
+    assert drop_web_search_tools({"input": "hi"}) == 0
 
 
 def test_extract_web_search_options_maps_filters_and_location():

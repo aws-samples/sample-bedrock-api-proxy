@@ -8,6 +8,11 @@ import json
 
 from app.api.openai_passthrough.chat_responses_adapter import sanitize_input_items
 
+# The rewrites below exist for the open-weight family, the only one that cannot
+# take `custom` tools or serve web search itself.
+GPT_OSS = "openai.gpt-oss-120b"
+GPT5 = "openai.gpt-5.6-sol"
+
 
 def _types(body):
     return [i.get("type") for i in body["input"]]
@@ -15,7 +20,7 @@ def _types(body):
 
 class TestDropUnsupported:
     def test_web_search_call_dropped(self):
-        body = {"input": [
+        body = {"model": GPT_OSS, "input": [
             {"type": "message", "role": "user", "content": "hi"},
             {"type": "web_search_call", "id": "w1", "status": "completed"},
         ]}
@@ -27,13 +32,13 @@ class TestDropUnsupported:
                        "local_shell_call_output", "computer_call",
                        "computer_call_output", "file_search_call",
                        "image_generation_call", "code_interpreter_call"]
-        body = {"input": [{"type": t} for t in unsupported]}
+        body = {"model": GPT_OSS, "input": [{"type": t} for t in unsupported]}
         notes = sanitize_input_items(body)
         assert len(notes) == len(unsupported)
         assert body["input"] == []
 
     def test_unknown_future_type_dropped(self):
-        body = {"input": [{"type": "some_new_thing_2027"}]}
+        body = {"model": GPT_OSS, "input": [{"type": "some_new_thing_2027"}]}
         assert sanitize_input_items(body) == ["dropped some_new_thing_2027"]
         assert body["input"] == []
 
@@ -49,18 +54,18 @@ class TestSupportedPreserved:
             {"type": "mcp_call", "id": "m", "name": "t", "server_label": "s"},
             {"type": "item_reference", "id": "msg_1"},
         ]
-        body = {"input": [dict(i) for i in original]}
+        body = {"model": GPT_OSS, "input": [dict(i) for i in original]}
         assert sanitize_input_items(body) == []
         assert body["input"] == original
 
     def test_typeless_message_preserved(self):
         """A bare {"role","content"} message is valid upstream."""
-        body = {"input": [{"role": "user", "content": "hi"}]}
+        body = {"model": GPT_OSS, "input": [{"role": "user", "content": "hi"}]}
         assert sanitize_input_items(body) == []
         assert body["input"] == [{"role": "user", "content": "hi"}]
 
     def test_body_untouched_when_nothing_changed(self):
-        body = {"input": [{"type": "message", "role": "user", "content": "x"}]}
+        body = {"model": GPT_OSS, "input": [{"type": "message", "role": "user", "content": "x"}]}
         before = body["input"]
         sanitize_input_items(body)
         assert body["input"] is before
@@ -78,7 +83,7 @@ class TestSupportedPreserved:
 
 class TestCustomToolCallRewrite:
     def test_custom_tool_call_becomes_function_call(self):
-        body = {"input": [{
+        body = {"model": GPT_OSS, "input": [{
             "type": "custom_tool_call", "call_id": "c1",
             "name": "apply_patch", "input": "*** Begin Patch",
         }]}
@@ -92,7 +97,7 @@ class TestCustomToolCallRewrite:
         assert "input" not in item
 
     def test_custom_tool_call_output_renamed(self):
-        body = {"input": [{
+        body = {"model": GPT_OSS, "input": [{
             "type": "custom_tool_call_output", "call_id": "c1", "output": "done",
         }]}
         assert sanitize_input_items(body) == [
@@ -104,20 +109,20 @@ class TestCustomToolCallRewrite:
         assert item["call_id"] == "c1"
 
     def test_non_string_input_becomes_empty_string(self):
-        body = {"input": [{"type": "custom_tool_call", "call_id": "c",
+        body = {"model": GPT_OSS, "input": [{"type": "custom_tool_call", "call_id": "c",
                            "name": "n", "input": {"unexpected": "shape"}}]}
         sanitize_input_items(body)
         assert json.loads(body["input"][0]["arguments"]) == {"input": ""}
 
     def test_existing_arguments_not_overwritten(self):
-        body = {"input": [{"type": "custom_tool_call", "call_id": "c",
+        body = {"model": GPT_OSS, "input": [{"type": "custom_tool_call", "call_id": "c",
                            "name": "n", "arguments": '{"a":1}', "input": "raw"}]}
         sanitize_input_items(body)
         assert json.loads(body["input"][0]["arguments"]) == {"a": 1}
 
     def test_call_pairing_preserved_across_rewrite(self):
         """call_id must survive so the output still matches its call."""
-        body = {"input": [
+        body = {"model": GPT_OSS, "input": [
             {"type": "custom_tool_call", "call_id": "x9", "name": "n",
              "input": "p"},
             {"type": "custom_tool_call_output", "call_id": "x9", "output": "o"},
@@ -129,7 +134,7 @@ class TestCustomToolCallRewrite:
 
 class TestOrdering:
     def test_order_preserved_with_mixed_items(self):
-        body = {"input": [
+        body = {"model": GPT_OSS, "input": [
             {"type": "message", "role": "user", "content": "1"},
             {"type": "web_search_call", "id": "w"},
             {"type": "custom_tool_call", "call_id": "c", "name": "n",
@@ -144,7 +149,33 @@ class TestOrdering:
         assert body["input"][2]["content"] == "2"
 
     def test_non_dict_entries_passed_through(self):
-        body = {"input": ["str", 42, None,
+        body = {"model": GPT_OSS, "input": ["str", 42, None,
                           {"type": "web_search_call"}]}
         sanitize_input_items(body)
         assert body["input"] == ["str", 42, None]
+
+
+class TestGpt5FamilyReplaysItsOwnHistory:
+    """What a family produces natively it must be able to replay verbatim."""
+
+    def test_custom_and_search_items_survive(self):
+        items = [
+            {"type": "message", "role": "user", "content": "hi"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "c1",
+                "name": "apply_patch",
+                "namespace": "mcp__x",
+                "input": "*** Begin Patch",
+            },
+            {"type": "custom_tool_call_output", "call_id": "c1", "output": "done"},
+            {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+        ]
+        body = {"model": GPT5, "input": [dict(i) for i in items]}
+        assert sanitize_input_items(body) == []
+        assert body["input"] == items
+
+    def test_still_drops_types_upstream_never_implemented(self):
+        body = {"model": GPT5, "input": [{"type": "computer_call"}]}
+        assert sanitize_input_items(body) == ["dropped computer_call"]
+        assert body["input"] == []

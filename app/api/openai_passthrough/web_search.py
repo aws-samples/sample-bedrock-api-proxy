@@ -65,6 +65,35 @@ def is_responses_web_search_request(body: dict[str, Any]) -> bool:
     return bool(_web_search_tools(body))
 
 
+def drop_web_search_tools(body: dict[str, Any]) -> int:
+    """Remove ``web_search`` tools from ``body["tools"]``, returning how many.
+
+    A client offers web search as a capability; it is not an instruction to
+    search. When the proxy cannot serve it, dropping the tool lets the turn
+    proceed without it, which is what the deployment actually supports.
+    Failing the request instead would take every other tool down with it — the
+    Codex CLI attaches web_search to every request, so refusing makes the
+    entire client unusable rather than merely search-less. The tool cannot be
+    forwarded either: mantle rejects the variant and, with it, the whole array.
+
+    Mutates ``body["tools"]`` in place.
+    """
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return 0
+    kept = [
+        tool
+        for tool in tools
+        if not (
+            isinstance(tool, dict) and tool.get("type") in OPENAI_WEB_SEARCH_TOOL_TYPES
+        )
+    ]
+    dropped = len(tools) - len(kept)
+    if dropped:
+        body["tools"] = kept
+    return dropped
+
+
 def _block_dict(block: Any) -> dict[str, Any]:
     if isinstance(block, dict):
         return block
