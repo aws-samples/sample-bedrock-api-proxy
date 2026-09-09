@@ -17,12 +17,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Dict, Optional
 from uuid import uuid4
 
+import httpx
 from openai import APIStatusError, OpenAI, OpenAIError
 
 from app.converters.anthropic_to_openai import AnthropicToOpenAIConverter
 from app.converters.anthropic_to_openai_responses import (
     AnthropicToOpenAIResponsesConverter,
 )
+from app.converters.openai_responses_stream import OpenAIResponsesStreamConverter
 from app.converters.openai_responses_to_anthropic import (
     OpenAIResponsesToAnthropicConverter,
 )
@@ -72,7 +74,12 @@ class OpenAICompatService:
     back to Anthropic format.
     """
 
-    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        http_client: httpx.Client | None = None,
+    ):
         """Initialize the OpenAI-compatible service.
 
         Args:
@@ -82,12 +89,18 @@ class OpenAICompatService:
                 bedrock-mantle endpoint.
             api_key: Optional override for the API key. Falls back to
                 ``settings.openai_api_key`` when None.
+            http_client: Optional transport/auth configured by the caller
+                (e.g. Runtime SigV4). Omitted from SDK kwargs unless supplied.
         """
         resolved_base_url = base_url or settings.openai_base_url
+        transport_kwargs: dict[str, Any] = {}
+        if http_client is not None:
+            transport_kwargs["http_client"] = http_client
         self.client = OpenAI(
             api_key=api_key or settings.openai_api_key,
             base_url=resolved_base_url,
             timeout=settings.bedrock_timeout,
+            **transport_kwargs,
         )
         self.request_converter = AnthropicToOpenAIConverter()
         self.response_converter = OpenAIToAnthropicConverter()
@@ -278,6 +291,7 @@ class OpenAICompatService:
             MessageResponse in Anthropic format.
         """
         kwargs = self.responses_request_converter.convert_request(request)
+        kwargs["stream"] = False
 
         print(f"[OPENAI-COMPAT-RESPONSES] Calling Responses API")
         print(f"  - Model: {kwargs.get('model')}")
@@ -364,6 +378,129 @@ class OpenAICompatService:
                 request,
                 request_id,
             )
+
+    async def invoke_responses_stream(
+        self, request: MessageRequest, request_id: str | None = None
+    ) -> AsyncGenerator[str, None]:
+        """Translate live Responses events using a bounded thread/async bridge.
+
+        A slow consumer backpressures the SDK reader. Cancellation stops queue
+        writes and closes the request's stream without closing the shared client.
+        The worker retains its concurrency slot until it actually exits.
+        """
+        event_queue: queue.Queue = queue.Queue(maxsize=64)
+        cancelled = threading.Event()
+        stream_lock = threading.Lock()
+        active_stream: list[Any] = []
+
+        def put(kind: str, data: Any = None) -> bool:
+            while not cancelled.is_set():
+                try:
+                    event_queue.put((kind, data), timeout=0.1)
+                    return True
+                except queue.Full:
+                    continue
+            return False
+
+        def close_stream() -> None:
+            with stream_lock:
+                stream = active_stream.pop() if active_stream else None
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    # Cleanup must not replace the original API error/cancellation.
+                    pass
+
+        def worker() -> None:
+            converter = OpenAIResponsesStreamConverter(request.model)
+            try:
+                if cancelled.is_set():
+                    return
+                kwargs = self.responses_request_converter.convert_request(request)
+                kwargs["stream"] = True
+                stream = self.client.responses.create(**kwargs)
+                with stream_lock:
+                    active_stream.append(stream)
+                if cancelled.is_set():
+                    return
+                for event in stream:
+                    if cancelled.is_set():
+                        return
+                    for converted in converter.feed(event.model_dump()):
+                        if not put("event", self._format_sse_event(converted)):
+                            return
+                    if converter.terminal:
+                        break
+                if not converter.terminal and not cancelled.is_set():
+                    raise BedrockAPIError(
+                        "incomplete_stream",
+                        "Responses stream ended before a terminal event",
+                    )
+            except Exception as exc:
+                error_type = "api_error"
+                if isinstance(exc, APIStatusError):
+                    error_type = {
+                        400: "invalid_request_error",
+                        401: "authentication_error",
+                        403: "permission_error",
+                        404: "not_found_error",
+                        429: "rate_limit_error",
+                    }.get(exc.status_code, "api_error")
+                elif isinstance(exc, BedrockAPIError):
+                    error_type = exc.error_type
+                put(
+                    "event",
+                    self._format_sse_event(
+                        {
+                            "type": "error",
+                            "error": {"type": error_type, "message": str(exc)},
+                        }
+                    ),
+                )
+            finally:
+                close_stream()
+                put("done")
+
+        semaphore = _get_semaphore()
+        await semaphore.acquire()
+        loop = asyncio.get_running_loop()
+        try:
+            future = loop.run_in_executor(_get_executor(), worker)
+        except BaseException:
+            semaphore.release()
+            raise
+        future.add_done_callback(lambda _: semaphore.release())
+        last_event_time = time.monotonic()
+        try:
+            while True:
+                try:
+                    kind, data = event_queue.get_nowait()
+                except queue.Empty:
+                    if future.done():
+                        # The worker may have enqueued between get_nowait and
+                        # done(); drain that final queue before returning.
+                        if not event_queue.empty():
+                            continue
+                        future.result()
+                        break
+                    if time.monotonic() - last_event_time >= 30:
+                        yield self._format_sse_event({"type": "ping"})
+                        last_event_time = time.monotonic()
+                    await asyncio.sleep(0.005)
+                    continue
+                if kind == "done":
+                    break
+                yield data
+                last_event_time = time.monotonic()
+        finally:
+            cancelled.set()
+            # Closing a sync HTTP stream can block. Bound the consumer's cleanup
+            # wait; the worker's finally also handles cancellation during create.
+            try:
+                await asyncio.wait_for(asyncio.to_thread(close_stream), timeout=0.5)
+            except TimeoutError:
+                pass
 
     async def invoke_model_stream(
         self, request: MessageRequest, request_id: Optional[str] = None

@@ -36,10 +36,11 @@ black app tests && ruff check app tests && mypy app
 
 - **InvokeModel API** (Claude models): Native Anthropic format, minimal conversion, full beta feature support
 - **Converse API** (non-Claude models): Requires format conversion, unified API for all Bedrock models
+- **Runtime Responses API** (default for scoped non-Claude IDs): After mapping, `global.`, `us.`, `eu.`, `apac.`, `us-gov.`, etc. use `https://bedrock-runtime.<region>.amazonaws.com/openai/v1/responses`. Supports streaming, tools, and AWS SigV4 or Bedrock API-key authentication. `ENABLE_BEDROCK_RESPONSES=False` restores previous routing.
 - **OpenAI Chat Completions API** (non-Claude models, optional): When `ENABLE_OPENAI_COMPAT=True`, non-Claude models use Bedrock's OpenAI-compatible endpoint via bedrock-mantle instead of Converse API
 - **OpenAI Passthrough** (any model bedrock-mantle accepts, optional): When `ENABLE_OPENAI_PASSTHROUGH=True`, mounts `/openai/v1/{chat/completions,responses,responses/{id},models}` for clients using OpenAI-format directly.
 
-**API selection**: If model ID contains "anthropic" or "claude" → InvokeModel; else if `ENABLE_OPENAI_COMPAT` → OpenAI Chat Completions; else → Converse. OpenAI Passthrough routes are independent and mount at `/openai/v1/*`.
+**API selection**: Resolve model mapping first. Claude/Anthropic → InvokeModel; scoped non-Claude ID with default `ENABLE_BEDROCK_RESPONSES=True` → Runtime Responses; else if `ENABLE_OPENAI_COMPAT` → OpenAI Chat Completions; else → Converse. OpenAI Passthrough routes are independent at `/openai/v1/*` and use the same scoped-ID endpoint selection.
 
 **Multi-Provider Gateway** (optional, `MULTI_PROVIDER_ENABLED`): when enabled, a routing engine (`app/routing/`) selects a target model/provider per request (rule/cost/quality/smart routing), a key pool (`app/keypool/`) rotates encrypted provider keys with rate-limit cooldown + cross-model failover, and `app/compression/` optionally compresses agent context. All flags default off (except `FAILOVER_ENABLED`/`CACHE_AWARE_ROUTING_ENABLED`) — zero impact when `MULTI_PROVIDER_ENABLED=False`. See [docs/smart-routing-guide.md](docs/smart-routing-guide.md).
 
@@ -211,7 +212,7 @@ Key CDK files: `cdk/config/config.ts`, `cdk/lib/ecs-stack.ts`, `cdk/scripts/depl
 
 **Feature Flags:** `ENABLE_TOOL_USE`, `ENABLE_EXTENDED_THINKING`, `ENABLE_DOCUMENT_SUPPORT`, `ENABLE_PROGRAMMATIC_TOOL_CALLING`, `ENABLE_STANDALONE_CODE_EXECUTION`, `ENABLE_WEB_SEARCH`, `ENABLE_WEB_FETCH`, `ENABLE_TRACING`
 
-**OpenAI-Compat:** `ENABLE_OPENAI_COMPAT`, `ENABLE_OPENAI_PASSTHROUGH`, `BEDROCK_API_KEY`, `MANTLE_ENDPOINT_URL`, `OPENAI_COMPAT_THINKING_HIGH_THRESHOLD`, `OPENAI_COMPAT_THINKING_MEDIUM_THRESHOLD`
+**OpenAI-Compat:** `ENABLE_BEDROCK_RESPONSES` (default true), `ENABLE_OPENAI_COMPAT`, `ENABLE_OPENAI_PASSTHROUGH`, `BEDROCK_API_KEY`, `MANTLE_ENDPOINT_URL` (takes precedence over `OPENAI_BASE_URL`), `OPENAI_COMPAT_THINKING_HIGH_THRESHOLD`, `OPENAI_COMPAT_THINKING_MEDIUM_THRESHOLD`
 
 **Multi-Provider Gateway:** `MULTI_PROVIDER_ENABLED`, `ROUTING_ENABLED`, `SMART_ROUTING_ENABLED`, `FAILOVER_ENABLED`, `COMPRESSION_ENABLED`, `CACHE_AWARE_ROUTING_ENABLED`, `PROVIDER_KEY_ENCRYPTION_SECRET`
 

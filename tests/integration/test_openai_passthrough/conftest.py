@@ -17,6 +17,10 @@ def mock_settings(monkeypatch, web_search_enabled):
     """Set the env so the passthrough router mounts and points at a fake mantle."""
     monkeypatch.setattr("app.core.config.settings.enable_openai_passthrough", True)
     monkeypatch.setattr("app.core.config.settings.openai_api_key", "bedrock-key-test")
+    monkeypatch.setattr("app.core.config.settings.enable_bedrock_responses", True)
+    monkeypatch.setattr("app.core.config.settings.aws_region", "us-east-1")
+    monkeypatch.setattr("app.core.config.settings.bedrock_endpoint_url", None)
+    monkeypatch.setattr("app.core.config.settings.default_model_mapping", {})
     monkeypatch.setattr(
         "app.core.config.settings.openai_base_url", "https://mantle.test/v1"
     )

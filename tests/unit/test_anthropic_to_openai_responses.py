@@ -4,7 +4,10 @@ Unit tests for AnthropicToOpenAIResponsesConverter.
 Verifies conversion of Anthropic MessageRequest objects into kwargs dicts
 suitable for the OpenAI SDK ``client.responses.create(**kwargs)`` call.
 """
+
 import json
+
+import pytest
 
 from app.converters.anthropic_to_openai_responses import (
     AnthropicToOpenAIResponsesConverter,
@@ -252,7 +255,7 @@ def test_tool_choice_specific_tool_becomes_function():
     assert result["tool_choice"] == {"type": "function", "name": "web_search"}
 
 
-def test_image_and_thinking_blocks_skipped():
+def test_image_preserved_and_provider_specific_thinking_replay_skipped():
     request = MessageRequest(
         model="openai.gpt-5.5",
         max_tokens=512,
@@ -262,9 +265,7 @@ def test_image_and_thinking_blocks_skipped():
                 content=[
                     TextContent(text="describe this"),
                     ImageContent(
-                        source=Base64ImageSource(
-                            media_type="image/png", data="abc123"
-                        )
+                        source=Base64ImageSource(media_type="image/png", data="abc123")
                     ),
                 ],
             ),
@@ -279,9 +280,14 @@ def test_image_and_thinking_blocks_skipped():
     )
     result = _converter().convert_request(request)
 
-    # Only text contributes; image and thinking are skipped silently.
     assert result["input"] == [
-        {"role": "user", "content": "describe this"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "describe this"},
+                {"type": "input_image", "image_url": "data:image/png;base64,abc123"},
+            ],
+        },
         {"role": "assistant", "content": "a cat"},
     ]
 
@@ -319,3 +325,157 @@ def test_consecutive_text_blocks_coalesced():
     )
     result = _converter().convert_request(request)
     assert result["input"] == [{"role": "user", "content": "first\nsecond"}]
+
+
+@pytest.mark.parametrize(
+    ("thinking", "reasoning"),
+    [
+        (None, None),
+        ({"type": "disabled"}, {"effort": "none"}),
+        ({"type": "enabled", "budget_tokens": 100}, {"effort": "low"}),
+        ({"type": "enabled", "budget_tokens": 200}, {"effort": "medium"}),
+        ({"type": "enabled", "budget_tokens": 400}, {"effort": "high"}),
+    ],
+)
+def test_thinking_effort_uses_configured_thresholds(monkeypatch, thinking, reasoning):
+    monkeypatch.setattr(
+        "app.core.config.settings.openai_compat_thinking_medium_threshold", 200
+    )
+    monkeypatch.setattr(
+        "app.core.config.settings.openai_compat_thinking_high_threshold", 400
+    )
+    request = MessageRequest(
+        model="global.openai.test",
+        messages=[Message(role="user", content="hi")],
+        thinking=thinking,
+    )
+    result = _converter().convert_request(request)
+    assert result.get("reasoning") == reasoning
+    assert "summary" not in result.get("reasoning", {})
+
+
+@pytest.mark.parametrize("disabled", [True, False, "true", "false"])
+def test_sampling_parallel_tools_and_stream(disabled):
+    request = MessageRequest(
+        model="global.openai.test",
+        messages=[Message(role="user", content="hi")],
+        temperature=0,
+        top_p=0.8,
+        top_k=10,
+        stop_sequences=["STOP"],
+        stream=True,
+    )
+    # The current MessageRequest schema types tool_choice values as strings.
+    # Internal callers can also use model_copy to supply the native boolean.
+    request = request.model_copy(
+        update={"tool_choice": {"type": "any", "disable_parallel_tool_use": disabled}}
+    )
+    result = _converter().convert_request(request)
+    assert result["temperature"] == 0
+    assert result["top_p"] == 0.8
+    assert result["stream"] is True
+    assert result["tool_choice"] == "required"
+    assert result["parallel_tool_calls"] is (disabled in (False, "false"))
+    assert not {"top_k", "stop", "stop_sequences"} & result.keys()
+
+
+def test_multimodal_replay_preserves_order_and_function_call_identity():
+    request = MessageRequest(
+        model="global.openai.test",
+        system="Help.",
+        messages=[
+            {"role": "system", "content": "Additional instruction"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Checking"},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "inspect",
+                        "input": {},
+                    },
+                    {"type": "text", "text": "Please wait"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": [
+                            {"type": "text", "text": "Screenshot"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": "https://example.com/a.png",
+                                },
+                            },
+                        ],
+                    },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "cGRm",
+                        },
+                    },
+                ],
+            },
+        ],
+    )
+    result = _converter().convert_request(request)
+    assert result["instructions"] == "Help."
+    assert result["input"] == [
+        {"role": "system", "content": "Additional instruction"},
+        {"role": "assistant", "content": "Checking"},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "inspect",
+            "arguments": "{}",
+        },
+        {"role": "assistant", "content": "Please wait"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "input_text", "text": "Screenshot"},
+                {"type": "input_image", "image_url": "https://example.com/a.png"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "filename": "document.pdf",
+                    "file_data": "data:application/pdf;base64,cGRm",
+                }
+            ],
+        },
+    ]
+
+
+def test_proxy_function_tools_retained_without_upstream_server_tools():
+    request = MessageRequest(
+        model="global.openai.test",
+        messages=[Message(role="user", content="hi")],
+        tools=[
+            {"type": "web_search_20250305", "name": "web_search"},
+            {
+                "name": "proxy_search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                },
+            },
+        ],
+    )
+    tools = _converter().convert_request(request)["tools"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "proxy_search"
+    assert tools[0]["type"] == "function"

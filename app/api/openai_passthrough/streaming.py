@@ -85,6 +85,7 @@ async def open_upstream_stream(
     extra_headers: dict[str, str] | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    extensions: dict[str, Any] | None = None,
 ) -> tuple[httpx.Response, bytes | None]:
     """Open an upstream streaming request and peek at the status code.
 
@@ -110,6 +111,7 @@ async def open_upstream_stream(
         ),
         json=body,
         headers=headers,
+        extensions=extensions,
     )
     try:
         resp = await client.send(req, stream=True)
@@ -150,6 +152,7 @@ async def stream_passthrough_response(
     """
     usage: dict[str, Any] = {}
     synthesize_event_lines = api_surface == "responses"
+    has_event_line = False
 
     try:
         async for raw_line in resp.aiter_lines():
@@ -163,13 +166,18 @@ async def stream_passthrough_response(
                         }
                     ),
                 )
-            # For the Responses API, prepend an ``event: <type>`` line whenever
-            # we see a data frame whose JSON carries a ``type`` field. This
-            # restores the OpenAI-spec SSE format that strict clients expect.
+            # Mantle needs an event line synthesized; Runtime may already send
+            # one. Track each SSE frame so mixed streams remain valid too.
             if synthesize_event_lines:
-                event_type = _extract_event_type(raw_line)
-                if event_type is not None:
-                    yield f"event: {event_type}\n".encode()
+                if not raw_line:
+                    has_event_line = False
+                elif raw_line.startswith("event:") or raw_line == "event":
+                    has_event_line = True
+                elif not has_event_line:
+                    event_type = _extract_event_type(raw_line)
+                    if event_type is not None:
+                        yield f"event: {event_type}\n".encode()
+                        has_event_line = True
 
             # Upstream gives us SSE lines without trailing newlines; restore the
             # framing byte so the SSE body is well-formed for the downstream client.

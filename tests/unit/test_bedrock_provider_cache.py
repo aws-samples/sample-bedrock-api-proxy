@@ -13,6 +13,8 @@ def _make_service():
         service.client = MagicMock(name="default_client")
         service._provider_clients = {}
         service._provider_clients_lock = threading.Lock()
+        service._responses_services = {}
+        service._responses_services_lock = threading.Lock()
         service._provider_client_ttl = 300
         service._provider_manager = None
         return service
@@ -58,8 +60,10 @@ def test_get_client_ttl_expired_recreates():
 def test_invalidate_provider_client():
     service = _make_service()
     service._provider_clients = {"prov-123": (MagicMock(), time.time())}
+    service._responses_services = {"prov-123": (MagicMock(), time.monotonic())}
     service.invalidate_provider_client("prov-123")
     assert "prov-123" not in service._provider_clients
+    assert "prov-123" not in service._responses_services
 
 
 def test_invalidate_nonexistent_is_noop():

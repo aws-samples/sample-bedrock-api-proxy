@@ -5,15 +5,17 @@ Renders an Anthropic ``MessageRequest`` (including conversation state threaded
 as ``messages``) into a kwargs dict suitable for the OpenAI SDK
 ``client.responses.create(**kwargs)`` call.
 
-Used by the proxy's server-side agentic loops (e.g. web search) to drive
-non-Claude, Responses-API-only models (e.g. ``openai.gpt-5.5``) through the
-OpenAI Responses API. The proxy maintains conversation state itself, so the
+Used by Messages requests and the proxy's server-side agentic loops to drive
+Responses-API models. The proxy maintains conversation state itself, so the
 request is always stateless (``store=False``) and the full conversation is
 re-rendered into the ``input`` array on every call.
 """
+
 import json
 from typing import Any
 
+from app.converters.anthropic_to_openai import AnthropicToOpenAIConverter
+from app.converters.thinking import is_thinking_enabled
 from app.schemas.anthropic import (
     Message,
     MessageRequest,
@@ -63,8 +65,31 @@ class AnthropicToOpenAIResponsesConverter:
         if request.tool_choice is not None:
             result["tool_choice"] = self._convert_tool_choice(request.tool_choice)
 
-        # Sampling params (temperature/top_p/stop/stream) are intentionally
-        # omitted: the server-side web-search loop controls sampling itself.
+        if isinstance(request.tool_choice, dict):
+            disabled = request.tool_choice.get("disable_parallel_tool_use")
+            if disabled in (True, "true"):
+                result["parallel_tool_calls"] = False
+            elif disabled in (False, "false"):
+                result["parallel_tool_calls"] = True
+
+        for field in ("temperature", "top_p", "stream"):
+            value = getattr(request, field)
+            if value is not None:
+                result[field] = value
+
+        if request.thinking is not None and is_thinking_enabled(request.thinking):
+            result["reasoning"] = {
+                "effort": AnthropicToOpenAIConverter()._convert_thinking_to_effort(
+                    request.thinking
+                )
+            }
+        elif (
+            request.thinking is not None and request.thinking.get("type") == "disabled"
+        ):
+            result["reasoning"] = {"effort": "none"}
+        # Responses has no stop/stop_sequences parameter. Do not forward it or
+        # top_k. Omit the optional reasoning.summary parameter for broader model
+        # compatibility, while preserving any summaries returned by the model.
 
         return result
 
@@ -105,18 +130,32 @@ class AnthropicToOpenAIResponsesConverter:
 
         items: list[dict[str, Any]] = []
         text_parts: list[str] = []
+        content_parts: list[dict[str, Any]] = []
 
         def flush_text() -> None:
             if text_parts:
-                items.append({"role": role, "content": "\n".join(text_parts)})
+                content_parts.append(
+                    {"type": "input_text", "text": "\n".join(text_parts)}
+                )
                 text_parts.clear()
+
+        def flush_message() -> None:
+            flush_text()
+            if content_parts:
+                # Retain the established compact shape for text-only replay.
+                value: Any = list(content_parts)
+                if len(value) == 1 and value[0]["type"] == "input_text":
+                    value = value[0]["text"]
+                items.append({"role": role, "content": value})
+                content_parts.clear()
 
         for block in content:
             if isinstance(block, TextContent) or (
                 isinstance(block, dict) and block.get("type") == "text"
             ):
                 text = (
-                    block.text if isinstance(block, TextContent)
+                    block.text
+                    if isinstance(block, TextContent)
                     else block.get("text", "")
                 )
                 text_parts.append(text)
@@ -124,7 +163,7 @@ class AnthropicToOpenAIResponsesConverter:
             elif isinstance(block, ToolUseContent) or (
                 isinstance(block, dict) and block.get("type") == "tool_use"
             ):
-                flush_text()
+                flush_message()
                 if isinstance(block, ToolUseContent):
                     call_id = block.id
                     name = block.name
@@ -133,24 +172,56 @@ class AnthropicToOpenAIResponsesConverter:
                     call_id = block.get("id", "")
                     name = block.get("name", "")
                     tool_input = block.get("input", {})
-                items.append({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": json.dumps(tool_input),
-                })
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": json.dumps(tool_input),
+                    }
+                )
 
             elif isinstance(block, ToolResultContent) or (
                 isinstance(block, dict) and block.get("type") == "tool_result"
             ):
-                flush_text()
+                flush_message()
                 items.append(self._convert_tool_result(block))
 
-            # Any other block type (image, thinking, etc.) is skipped:
-            # the agentic loop this serves is text + tools only.
+            else:
+                converted = self._convert_media(block)
+                if converted is not None:
+                    flush_text()
+                    content_parts.append(converted)
+            # Anthropic thinking/signatures cannot be replayed as OpenAI
+            # reasoning items without their original provider-specific state.
 
-        flush_text()
+        flush_message()
         return items
+
+    @staticmethod
+    def _convert_media(block: Any) -> dict[str, Any] | None:
+        """Convert the image/PDF source shapes accepted by Messages."""
+        data = block.model_dump() if hasattr(block, "model_dump") else block
+        if not isinstance(data, dict):
+            return None
+        source = data.get("source") or {}
+        if data.get("type") == "image":
+            if source.get("type") == "url":
+                return {"type": "input_image", "image_url": source["url"]}
+            if source.get("type", "base64") == "base64":
+                return {
+                    "type": "input_image",
+                    "image_url": (
+                        f"data:{source['media_type']};base64,{source['data']}"
+                    ),
+                }
+        if data.get("type") == "document" and source.get("type", "base64") == "base64":
+            return {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": f"data:{source['media_type']};base64,{source['data']}",
+            }
+        return None
 
     def _convert_tool_result(self, block: Any) -> dict[str, Any]:
         """Convert a tool_result block into a function_call_output item."""
@@ -161,23 +232,36 @@ class AnthropicToOpenAIResponsesConverter:
             call_id = block.get("tool_use_id", "")
             content = block.get("content", "")
 
+        output: Any
         if isinstance(content, str):
             output = content
         elif isinstance(content, list):
             parts: list[str] = []
-            has_text = False
+            rich_parts: list[dict[str, Any]] = []
+            has_media = False
             for item in content:
                 if isinstance(item, TextContent):
                     parts.append(item.text)
-                    has_text = True
+                    rich_parts.append({"type": "input_text", "text": item.text})
                 elif isinstance(item, dict) and item.get("type") == "text":
                     parts.append(item.get("text", ""))
-                    has_text = True
-            if has_text:
+                    rich_parts.append(
+                        {"type": "input_text", "text": item.get("text", "")}
+                    )
+                else:
+                    converted = self._convert_media(item)
+                    if converted is not None:
+                        has_media = True
+                        rich_parts.append(converted)
+            if has_media:
+                output = rich_parts
+            elif parts:
                 output = "\n".join(parts)
             else:
                 # Non-text content (e.g. images) — fall back to a JSON dump.
                 output = self._dump_content(content)
+        elif content is None:
+            output = ""
         else:
             output = str(content)
 
@@ -190,6 +274,7 @@ class AnthropicToOpenAIResponsesConverter:
     @staticmethod
     def _dump_content(content: Any) -> str:
         """Best-effort JSON serialization of arbitrary tool-result content."""
+
         def _default(obj: Any) -> Any:
             if hasattr(obj, "model_dump"):
                 return obj.model_dump()
@@ -206,13 +291,22 @@ class AnthropicToOpenAIResponsesConverter:
         for tool in tools:
             # Tools may be pydantic Tool objects OR raw dicts (the web-search
             # agentic loop passes dicts). Normalize to a dict first.
-            td = tool.model_dump() if hasattr(tool, "model_dump") else (
-                tool if isinstance(tool, dict) else {}
+            td = (
+                tool.model_dump()
+                if hasattr(tool, "model_dump")
+                else (tool if isinstance(tool, dict) else {})
             )
             # Default name/description to "" — mantle rejects null values.
             name = td.get("name") or ""
             description = td.get("description") or ""
             input_schema = td.get("input_schema")
+            # Native server tools are executed by the proxy's existing loops.
+            # Runtime accepts function definitions, not server tool types.
+            if (
+                td.get("type") not in (None, "custom", "function")
+                and input_schema is None
+            ):
+                continue
 
             if isinstance(input_schema, dict):
                 parameters = input_schema
@@ -221,12 +315,14 @@ class AnthropicToOpenAIResponsesConverter:
             else:
                 parameters = {}
 
-            openai_tools.append({
-                "type": "function",
-                "name": name,
-                "description": description,
-                "parameters": parameters,
-            })
+            openai_tools.append(
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                }
+            )
         return openai_tools
 
     def _convert_tool_choice(self, tool_choice: Any) -> Any:

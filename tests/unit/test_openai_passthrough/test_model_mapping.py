@@ -1,7 +1,14 @@
 """Tests for resolve_model_id."""
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.api.openai_passthrough.model_mapping import resolve_model_id
+
+
+@pytest.fixture(autouse=True)
+def isolated_defaults(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.default_model_mapping", {})
 
 
 def test_returns_mapped_id_when_mapping_exists():

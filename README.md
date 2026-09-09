@@ -63,7 +63,7 @@ A lightweight API translation service that lets you use various large language m
 - **Prompt Cache TTL**: Extends `cache_control` with configurable 1-hour TTL. Three-level priority: API key → request → env default.
 - **Beta Header Mapping**: Auto-maps Anthropic beta headers to Bedrock beta headers.
 - **Tool Input Examples**: `input_examples` parameter for tool definitions.
-- **OpenAI-Compatible API**: Non-Claude models can use Bedrock's OpenAI Chat Completions API (via bedrock-mantle). Maps `thinking` → `reasoning`.
+- **OpenAI-Compatible API**: Scoped non-Claude IDs (`global.`, `us.`, etc.) default to Bedrock Runtime Responses, including streaming and tools. Unscoped models can use Mantle Chat Completions. Maps `thinking` → `reasoning`.
 - **OpenAI Passthrough**: `/openai/v1/*` endpoints forward OpenAI SDK requests to Bedrock Mantle. Supports Responses API web search with stateful `previous_response_id`.
 - **Service Tier**: Per-key Bedrock service tier (`default`/`flex`/`priority`/`reserved`) with auto-fallback.
 
@@ -405,10 +405,21 @@ print(resp.output_text)
 ```
 
 ### Routing Logic
+- Resolve model aliases before selecting the API.
 - Model contains "anthropic" or "claude" → **InvokeModel API** (native format)
+- Other IDs with a scope prefix (`global.`, `us.`, `eu.`, `apac.`, `us-gov.`, etc.) → **Bedrock Runtime Responses API**, enabled by default independently of `ENABLE_OPENAI_COMPAT`
 - `ENABLE_OPENAI_COMPAT=true` → **OpenAI Chat Completions** (via bedrock-mantle)
 - Otherwise → **Converse API** (unified Bedrock API)
 - `/openai/v1/*` → **OpenAI Passthrough** (independent routes)
+
+Runtime uses `https://bedrock-runtime.<region>.amazonaws.com/openai/v1`.
+Set `OPENAI_BASE_URL` to select a Runtime region explicitly, or let the proxy derive
+it from the existing AWS/Mantle configuration. `MANTLE_ENDPOINT_URL` takes precedence
+if both URL variables are set. Explicit custom provider endpoints are preserved.
+Authentication uses the Bedrock API key when configured, otherwise AWS credentials
+with SigV4. Set `ENABLE_BEDROCK_RESPONSES=false` to restore previous routing.
+Model support still depends on the selected model and region; the proxy forwards
+upstream errors instead of silently retrying a different API.
 
 ### ECS Production Architecture
 

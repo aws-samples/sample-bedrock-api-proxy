@@ -529,7 +529,15 @@ class Settings(BaseSettings):
         description="Maximum bytes to download per image URL (Bedrock applies its own stricter limits downstream)"
     )
 
-    # === OpenAI-Compatible API Settings (Bedrock Mantle) ===
+    # === OpenAI-Compatible API Settings (Bedrock Runtime and Mantle) ===
+    enable_bedrock_responses: bool = Field(
+        default=True,
+        alias="ENABLE_BEDROCK_RESPONSES",
+        description=(
+            "Default scoped non-Claude model IDs (global., us., eu., etc.) "
+            "to Bedrock Runtime Responses, independently of ENABLE_OPENAI_COMPAT"
+        ),
+    )
     # When enabled, non-Claude models use OpenAI Chat Completions API via bedrock-mantle
     # instead of Bedrock Converse API. Claude models still use InvokeModel API.
     enable_openai_compat: bool = Field(
@@ -541,7 +549,7 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("BEDROCK_API_KEY", "OPENAI_API_KEY"),
         description=(
-            "Bedrock API key for Bedrock Mantle endpoint. "
+            "Bedrock API key for Runtime and Mantle endpoints. "
             "OPENAI_API_KEY is accepted as a deprecated fallback."
         )
     )
@@ -549,9 +557,9 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MANTLE_ENDPOINT_URL", "OPENAI_BASE_URL"),
         description=(
-            "Bedrock Mantle endpoint URL "
-            "(e.g. https://bedrock-mantle.us-east-1.api.aws/v1). "
-            "OPENAI_BASE_URL is accepted as a deprecated fallback."
+            "Bedrock OpenAI endpoint URL, including Runtime /openai/v1. "
+            "Scoped non-Claude IDs default to Runtime. "
+            "OPENAI_BASE_URL is also accepted; MANTLE_ENDPOINT_URL takes precedence."
         )
     )
     openai_compat_thinking_high_threshold: int = Field(

@@ -1,8 +1,11 @@
 """Unit tests for OpenAIResponsesToAnthropicConverter."""
 
+import pytest
+
 from app.converters.openai_responses_to_anthropic import (
     OpenAIResponsesToAnthropicConverter,
 )
+from app.core.exceptions import BedrockAPIError
 from app.schemas.anthropic import MessageResponse, TextContent, ToolUseContent
 
 
@@ -79,7 +82,7 @@ def test_usage_mapping():
         "usage": {
             "input_tokens": 100,
             "output_tokens": 50,
-            "input_tokens_details": {"cached_tokens": 30},
+            "input_tokens_details": {"cached_tokens": 30, "cache_write_tokens": 20},
             "output_tokens_details": {"reasoning_tokens": 12},
             "total_tokens": 150,
         },
@@ -87,9 +90,10 @@ def test_usage_mapping():
 
     result = _converter().convert_response(resp, model="m")
 
-    assert result.usage.input_tokens == 100
+    assert result.usage.input_tokens == 50
     assert result.usage.output_tokens == 50
     assert result.usage.cache_read_input_tokens == 30
+    assert result.usage.cache_creation_input_tokens == 20
     assert result.usage.reasoning_tokens == 12
 
 
@@ -101,6 +105,7 @@ def test_usage_missing_fields_default_to_zero():
     assert result.usage.input_tokens == 0
     assert result.usage.output_tokens == 0
     assert result.usage.cache_read_input_tokens is None
+    assert result.usage.cache_creation_input_tokens is None
     assert result.usage.reasoning_tokens is None
 
 
@@ -121,9 +126,7 @@ def test_mixed_reasoning_function_call_and_message():
             {
                 "type": "message",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "done", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "done", "annotations": []}],
             },
         ],
         "usage": {"input_tokens": 1, "output_tokens": 1},
@@ -197,3 +200,115 @@ def test_function_call_invalid_arguments_defaults_to_empty_dict():
     block = result.content[0]
     assert isinstance(block, ToolUseContent)
     assert block.input == {}
+
+
+def test_reasoning_summaries_preserved_in_output_order():
+    response = _converter().convert_response(
+        {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        {"type": "summary_text", "text": "First thought."},
+                        {"type": "summary_text", "text": "Second thought."},
+                    ],
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Answer"}],
+                },
+            ],
+        },
+        model="m",
+    )
+    assert [b.type for b in response.content] == ["thinking", "thinking", "text"]
+    assert response.content[0].thinking == "First thought."
+    assert response.content[1].thinking == "Second thought."
+
+
+@pytest.mark.parametrize("has_tool", [False, True])
+def test_token_limit_takes_precedence_over_tool_stop_reason(has_tool):
+    output = (
+        [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": '{"q":',
+            }
+        ]
+        if has_tool
+        else []
+    )
+    response = _converter().convert_response(
+        {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": output,
+            "usage": {"input_tokens": 20, "output_tokens": 100},
+        },
+        model="m",
+    )
+    assert response.stop_reason == "max_tokens"
+    assert response.usage.output_tokens == 100
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {
+            "status": "failed",
+            "output": [],
+            "error": {"code": "server_error", "message": "broken"},
+        },
+        {"status": "completed", "output": [], "error": {"message": "broken"}},
+        {"status": "cancelled", "output": []},
+        {"status": "in_progress", "output": []},
+        {"message": "Unknown operation", "__type": "UnknownOperationException"},
+        {
+            "status": "incomplete",
+            "output": [],
+            "incomplete_details": {"reason": "unknown"},
+        },
+    ],
+)
+def test_error_envelopes_are_not_empty_successes(response):
+    with pytest.raises(BedrockAPIError):
+        _converter().convert_response(response, model="m")
+
+
+def test_content_filter_maps_to_refusal():
+    response = _converter().convert_response(
+        {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "content_filter"},
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "refusal", "refusal": "Cannot help."}],
+                }
+            ],
+        },
+        model="m",
+    )
+    assert response.stop_reason == "refusal"
+    assert response.content[0].text == "Cannot help."
+
+
+@pytest.mark.parametrize(
+    ("details", "expected_input"),
+    [
+        (None, 100),
+        ({"cached_tokens": 0, "cache_write_tokens": 0}, 100),
+        ({"cached_tokens": 100}, 0),
+        ({"cache_write_tokens": 100}, 0),
+        ({"cached_tokens": 101}, 0),
+    ],
+)
+def test_cache_exclusive_input_and_missing_details(details, expected_input):
+    usage = _converter().convert_usage(
+        {"input_tokens": 100, "output_tokens": 10, "input_tokens_details": details}
+    )
+    assert usage.input_tokens == expected_input
+    assert usage.output_tokens == 10

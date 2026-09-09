@@ -19,6 +19,9 @@ calls happen.
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from app.schemas.anthropic import Message, MessageRequest
 
 
@@ -74,9 +77,7 @@ def test_constructor_forwards_base_url_and_api_key_overrides():
     with patch("app.services.openai_compat_service.OpenAI") as mock_openai:
         from app.services.openai_compat_service import OpenAICompatService
 
-        OpenAICompatService(
-            base_url="https://prov.test/openai/v1", api_key="prov-key"
-        )
+        OpenAICompatService(base_url="https://prov.test/openai/v1", api_key="prov-key")
 
         _, kwargs = mock_openai.call_args
         assert kwargs["base_url"] == "https://prov.test/openai/v1"
@@ -103,6 +104,16 @@ def test_constructor_defaults_to_global_settings(monkeypatch):
         _, kwargs = mock_openai.call_args
         assert kwargs["base_url"] == "https://global.test/openai/v1"
         assert kwargs["api_key"] == "global-key"
+        assert "http_client" not in kwargs
+
+
+def test_constructor_forwards_supplied_http_client():
+    with httpx.Client() as client:
+        with patch("app.services.openai_compat_service.OpenAI") as mock_openai:
+            from app.services.openai_compat_service import OpenAICompatService
+
+            OpenAICompatService(http_client=client)
+            assert mock_openai.call_args.kwargs["http_client"] is client
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +160,75 @@ async def test_invoke_responses_async_matches_sync():
     assert len(tool_blocks) == 1
     assert tool_blocks[0].id == "call_0"
     assert tool_blocks[0].input == {"query": "hi"}
+
+
+def test_sync_real_sdk_uses_supplied_transport_and_overrides_stream():
+    import json
+
+    from app.services.openai_compat_service import OpenAICompatService
+
+    bodies = []
+
+    def handle(request):
+        assert request.url.path == "/openai/v1/responses"
+        assert request.headers["authorization"] == "Bearer test-key"
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_responses_dict())
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        service = OpenAICompatService(
+            base_url="https://runtime.test/openai/v1",
+            api_key="test-key",
+            http_client=client,
+        )
+        request = _request().model_copy(update={"stream": True})
+        response = service.invoke_responses_sync(request)
+    assert bodies[0]["stream"] is False
+    assert bodies[0]["store"] is False
+    assert response.content[0].id == "call_0"
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])
+def test_sync_real_sdk_maps_http_errors(status):
+    from app.core.exceptions import BedrockAPIError
+    from app.services.openai_compat_service import OpenAICompatService
+
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                status, json={"error": {"message": "upstream error"}}
+            )
+        )
+    ) as client:
+        service = OpenAICompatService(
+            base_url="https://runtime.test", api_key="test-key", http_client=client
+        )
+        service.client.max_retries = 0
+        with pytest.raises(BedrockAPIError) as error:
+            service.invoke_responses_sync(_request())
+    assert error.value.http_status == status
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "status": "failed",
+            "output": [],
+            "error": {"code": "server_error", "message": "Failed generation"},
+        },
+        {"__type": "UnknownOperationException", "message": "Unsupported operation"},
+    ],
+)
+def test_sync_real_sdk_rejects_error_in_successful_http_response(body):
+    from app.core.exceptions import BedrockAPIError
+    from app.services.openai_compat_service import OpenAICompatService
+
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body))
+    ) as client:
+        service = OpenAICompatService(
+            base_url="https://runtime.test", api_key="test-key", http_client=client
+        )
+        with pytest.raises(BedrockAPIError):
+            service.invoke_responses_sync(_request())

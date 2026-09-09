@@ -309,6 +309,7 @@ export class ECSStack extends cdk.Stack {
 
       // OpenAI-Compatible API (Bedrock Mantle)
       ENABLE_OPENAI_COMPAT: config.enableOpenaiCompat.toString(),
+      ENABLE_BEDROCK_RESPONSES: (config.enableBedrockResponses ?? true).toString(),
       ENABLE_OPENAI_PASSTHROUGH: config.enableOpenaiPassthrough.toString(),
       ...(config.openaiBaseUrl && { MANTLE_ENDPOINT_URL: config.openaiBaseUrl }),
       ...((process.env.BEDROCK_API_KEY || process.env.OPENAI_API_KEY) && {

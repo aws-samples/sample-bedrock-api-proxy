@@ -92,6 +92,7 @@ export interface EnvironmentConfig {
 
   // OpenAI-Compatible API (Bedrock Mantle) Configuration
   enableOpenaiCompat: boolean;
+  enableBedrockResponses?: boolean;         // Scoped non-Claude IDs use Runtime by default
   enableOpenaiPassthrough: boolean;          // Mount /openai/v1/* passthrough endpoints
   openaiBaseUrl?: string;                    // e.g., https://bedrock-mantle.us-east-1.api.aws/v1
 
@@ -464,6 +465,9 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
 
   const resolved: EnvironmentConfig = {
     ...config,
+    enableBedrockResponses: process.env.ENABLE_BEDROCK_RESPONSES
+      ? process.env.ENABLE_BEDROCK_RESPONSES.toLowerCase() === 'true'
+      : (config.enableBedrockResponses ?? true),
     platform,
     launchType,
     ec2InstanceType,
@@ -535,9 +539,10 @@ export function validateConfig(config: EnvironmentConfig, environmentName: strin
     );
   }
 
-  // Both surfaces authenticate to Mantle with a bearer token.
+  // Runtime can authenticate with the task role through SigV4.
   const hasBedrockApiKey = Boolean(process.env.BEDROCK_API_KEY || process.env.OPENAI_API_KEY);
-  if (needsMantleEndpoint && !hasBedrockApiKey) {
+  const usesRuntimeEndpoint = /^https:\/\/bedrock-runtime\.[a-z0-9-]+\.(amazonaws\.com(?:\.cn)?|api\.aws)(?:\/|$)/.test(config.openaiBaseUrl || '');
+  if (needsMantleEndpoint && !usesRuntimeEndpoint && !hasBedrockApiKey) {
     errors.push(
       `openaiCompat/openaiPassthrough is enabled but no Bedrock API key is available. ` +
       `Export BEDROCK_API_KEY for this deploy. Without it the proxy sends ` +

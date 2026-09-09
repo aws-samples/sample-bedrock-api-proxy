@@ -1,9 +1,11 @@
 """
 Bedrock service for interacting with AWS Bedrock APIs.
 
-Supports two API modes:
-1. Converse API (default): Used for most models, provides unified interface
-2. InvokeModel API: Used for Claude models when beta features require it
+Routes mapped model IDs to:
+1. InvokeModel API for Claude models
+2. Runtime Responses API by default for scoped non-Claude IDs
+3. Optional OpenAI-compatible Chat Completions for other non-Claude IDs
+4. Converse API for the remaining models
 
 Handles both streaming and non-streaming requests to Bedrock models.
 
@@ -17,26 +19,34 @@ import logging
 import queue
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Dict, Optional
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
-
 import boto3
+import httpx
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.converters.anthropic_to_bedrock import AnthropicToBedrockConverter
 from app.converters.bedrock_to_anthropic import BedrockToAnthropicConverter
 from app.core.config import settings
-from app.schemas.web_search import WEB_SEARCH_TOOL_TYPES, decode_content as _ws_decode
 from app.core.exceptions import BedrockAPIError, map_bedrock_error
 from app.schemas.anthropic import CountTokensRequest, MessageRequest, MessageResponse
+from app.schemas.web_search import WEB_SEARCH_TOOL_TYPES
+from app.schemas.web_search import decode_content as _ws_decode
+from app.services.bedrock_openai import (
+    REGION_PREFIXES,
+    BedrockSigV4Auth,
+    is_runtime_model,
+    resolve_runtime_base_url,
+)
 from app.services.inference_profile_resolver import (
     get_inference_profile_resolver,
 )
 
+logger = logging.getLogger(__name__)
 
 # Global thread pool and semaphore for Bedrock calls
 # Using module-level to share across BedrockService instances
@@ -46,7 +56,7 @@ _executor_lock = threading.Lock()
 
 
 # Region/scope prefixes that precede the real provider segment in Bedrock IDs.
-_REGION_PREFIXES = frozenset({"global", "us", "eu", "apac", "ca", "sa", "af", "me", "cn"})
+_REGION_PREFIXES = REGION_PREFIXES
 
 
 def _derive_provider(bedrock_model_id: str) -> str:
@@ -99,6 +109,7 @@ class BedrockService:
         openai_base_url: str | None = None,
         openai_api_key: str | None = None,
         openai_use_responses: bool = False,
+        provider_id: str | None = None,
     ):
         """Initialize Bedrock service.
 
@@ -113,6 +124,7 @@ class BedrockService:
             openai_use_responses: When True, non-Claude models are dispatched to
                 the OpenAI Responses API (``invoke_responses``) instead of the
                 Chat Completions API (``invoke_model``).
+            provider_id: Default account for proxy-managed tool loops.
         """
         # Configure boto3 with timeout settings
         # Using standard retry mode instead of adaptive to avoid long backoff delays
@@ -153,6 +165,11 @@ class BedrockService:
         # provider supplies the key. OpenAICompatService(base_url=None,
         # api_key=None) falls back to globals, preserving existing behavior.
         self._openai_use_responses = openai_use_responses
+        self._default_provider_id = provider_id
+        self._openai_base_url_override = openai_base_url
+        self._openai_api_key_override = openai_api_key
+        self._responses_services: dict[str, Any] = {}
+        self._responses_services_lock = threading.Lock()
         self._openai_compat_service = None
         use_global = settings.enable_openai_compat and settings.openai_api_key and settings.openai_base_url
         use_override = bool(openai_base_url and openai_api_key)
@@ -167,6 +184,83 @@ class BedrockService:
                 f"[BEDROCK] OpenAI-compat mode enabled, "
                 f"endpoint={endpoint_source}, responses={openai_use_responses}"
             )
+
+    def _responses_service_for_model(self, model_id: str, provider_id=None):
+        """Lazily build a Runtime client with the selected provider's identity."""
+        if not settings.enable_bedrock_responses or not is_runtime_model(model_id):
+            return None
+        import os
+
+        from app.services.openai_compat_service import OpenAICompatService
+
+        cache_key = provider_id or ""
+        with self._responses_services_lock:
+            cached = self._responses_services.get(cache_key)
+            if cached and time.monotonic() - cached[1] < self._provider_client_ttl:
+                return cached[0]
+
+            region = settings.aws_region
+            base_url = self._openai_base_url_override or settings.openai_base_url
+            api_key = (
+                self._openai_api_key_override
+                or settings.openai_api_key
+                or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            )
+            credentials = None
+            if provider_id:
+                manager = self._get_provider_manager()
+                provider = manager.get_provider(provider_id)
+                if not provider or not provider.get("is_active", False):
+                    raise ValueError(f"Provider {provider_id} not found or inactive")
+                region = provider.get("aws_region") or region
+                # An account with no endpoint uses its own region, not global Mantle.
+                base_url = provider.get("endpoint_url")
+                creds = manager.get_decrypted_credentials(provider_id) or {}
+                if provider.get("auth_type") == "bearer_token":
+                    api_key = creds.get("bearer_token")
+                    if not api_key:
+                        raise ValueError(f"Provider {provider_id} has no bearer token")
+                else:
+                    from botocore.credentials import Credentials
+                    if not creds.get("access_key_id") or not creds.get("secret_access_key"):
+                        raise ValueError(f"Provider {provider_id} has no AWS credentials")
+                    credentials = Credentials(
+                        creds["access_key_id"],
+                        creds["secret_access_key"],
+                        creds.get("session_token"),
+                    )
+                    api_key = None
+            if not api_key and credentials is None:
+                credentials = self.client._request_signer._credentials
+
+            endpoint = resolve_runtime_base_url(base_url, region if provider_id else None)
+            kwargs: dict[str, Any] = {"base_url": endpoint, "api_key": api_key}
+            if not api_key:
+                kwargs["api_key"] = "aws-sigv4"
+                kwargs["http_client"] = httpx.Client(
+                    auth=BedrockSigV4Auth(credentials, region),
+                    timeout=settings.bedrock_timeout,
+                )
+            service = OpenAICompatService(**kwargs)
+            # A retired service stays alive while an invocation/stream holds it.
+            # Close its SDK and supplied httpx client once those references end.
+            # The callback retains the client, never the service itself.
+            weakref.finalize(service, service.client.close)
+            self._responses_services[cache_key] = (service, time.monotonic())
+            return service
+
+    def _openai_route(self, request: MessageRequest, provider_id=None):
+        """Resolve mapping before choosing the API, retaining the original request."""
+        provider_id = provider_id or self._default_provider_id
+        model_id = self._get_bedrock_model_id(request.model)
+        if self._is_claude_model(model_id):
+            return None
+        service = self._responses_service_for_model(model_id, provider_id)
+        if service:
+            return service, True, request.model_copy(update={"model": model_id})
+        if self._openai_compat_service:
+            return self._openai_compat_service, self._openai_use_responses, request
+        return None
 
     def _is_claude_model(self, model_id: str) -> bool:
         """
@@ -268,6 +362,8 @@ class BedrockService:
         """Remove a cached provider client (call when provider is updated/deleted)."""
         with self._provider_clients_lock:
             self._provider_clients.pop(provider_id, None)
+        with self._responses_services_lock:
+            self._responses_services.pop(provider_id, None)
 
     def _get_bedrock_model_id(self, anthropic_model_id: str) -> str:
         """
@@ -280,7 +376,8 @@ class BedrockService:
             Bedrock model ID
         """
         # Use the converter's model mapping logic
-        return self.anthropic_to_bedrock._convert_model_id(anthropic_model_id)
+        mapped = self.anthropic_to_bedrock._convert_model_id(anthropic_model_id)
+        return mapped if isinstance(mapped, str) and mapped else anthropic_model_id
 
     def _convert_to_anthropic_native_request(
         self, request: MessageRequest, anthropic_beta: Optional[str] = None
@@ -688,10 +785,13 @@ class BedrockService:
         """
         # Route non-Claude models to OpenAI-compat BEFORE acquiring Bedrock semaphore
         # (OpenAI-compat service manages its own semaphore)
-        if not self._is_claude_model(request.model) and self._openai_compat_service:
-            if self._openai_use_responses:
-                return await self._openai_compat_service.invoke_responses(request, request_id)
-            return await self._openai_compat_service.invoke_model(request, request_id)
+        route = self._openai_route(request, provider_id)
+        if route:
+            service, responses, upstream_request = route
+            invoke = service.invoke_responses if responses else service.invoke_model
+            result: MessageResponse = await invoke(upstream_request, request_id)
+            result.model = request.model
+            return result
 
         semaphore = _get_semaphore()
         async with semaphore:
@@ -759,15 +859,17 @@ class BedrockService:
         cache_ttl: Optional[str] = None, provider_id: Optional[str] = None
     ) -> MessageResponse:
         """Inner sync invocation after OTEL context is attached."""
-        # Route Claude models to InvokeModel API for better feature support
-        if self._is_claude_model(request.model):
+        # Resolve aliases before API selection, including Claude-backed aliases.
+        route = self._openai_route(request, provider_id)
+        if route:
+            service, responses, upstream_request = route
+            invoke = service.invoke_responses_sync if responses else service.invoke_model_sync
+            result: MessageResponse = invoke(upstream_request, request_id)
+            result.model = request.model
+            return result
+        if self._is_claude_model(self._get_bedrock_model_id(request.model)):
             print(f"[BEDROCK] Using InvokeModel API for Claude model: {request.model}")
             return self._invoke_model_native_sync(request, request_id, service_tier, anthropic_beta, cache_ttl=cache_ttl, provider_id=provider_id)
-
-        # Route to OpenAI-compat service if enabled
-        if self._openai_compat_service:
-            print(f"[BEDROCK] Using OpenAI Chat Completions API for non-Claude model: {request.model}")
-            return self._openai_compat_service.invoke_model_sync(request, request_id)
 
         print(f"[BEDROCK] Converting request to Bedrock format for request {request_id}")
 
@@ -1033,8 +1135,13 @@ class BedrockService:
             MessageResponse object
         """
         from app.schemas.anthropic import (
-            MessageResponse, Usage, TextContent, ThinkingContent,
-            RedactedThinkingContent, ToolUseContent, CompactionContent
+            CompactionContent,
+            MessageResponse,
+            RedactedThinkingContent,
+            TextContent,
+            ThinkingContent,
+            ToolUseContent,
+            Usage,
         )
 
         # Extract content blocks
@@ -1119,10 +1226,16 @@ class BedrockService:
         """
         # Route non-Claude models to OpenAI-compat streaming BEFORE acquiring semaphore
         # (OpenAI-compat service manages its own semaphore)
-        if not self._is_claude_model(request.model) and self._openai_compat_service:
+        route = self._openai_route(request, provider_id)
+        if route:
+            service, responses, upstream_request = route
             message_id = request_id or f"msg_{uuid4().hex}"
-            print(f"[BEDROCK STREAM] Using OpenAI Chat Completions API (streaming) for: {request.model}")
-            async for event in self._openai_compat_service.invoke_model_stream(request, message_id):
+            invoke = service.invoke_responses_stream if responses else service.invoke_model_stream
+            async for event in invoke(upstream_request, message_id):
+                if upstream_request.model != request.model and event.startswith("event: message_start\n"):
+                    payload = json.loads(event.split("data: ", 1)[1])
+                    payload["message"]["model"] = request.model
+                    event = f"event: message_start\ndata: {json.dumps(payload)}\n\n"
                 yield event
             return
 
@@ -1147,7 +1260,7 @@ class BedrockService:
             effective_service_tier = service_tier or settings.default_service_tier
 
             # Route Claude models to InvokeModelWithResponseStream for better feature support
-            if self._is_claude_model(request.model):
+            if self._is_claude_model(self._get_bedrock_model_id(request.model)):
                 print(f"[BEDROCK STREAM] Using InvokeModelWithResponseStream for Claude model: {request.model}")
 
                 # Get Bedrock model ID

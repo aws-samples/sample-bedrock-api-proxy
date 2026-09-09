@@ -585,7 +585,27 @@ Before this feature, a request carrying `"thinking": {"type": "disabled"}` was t
 
 ## OpenAI Passthrough
 
-Adds new `/openai/v1/*` endpoints that accept OpenAI-native API formats and call `bedrock-mantle`. Distinct from `ENABLE_OPENAI_COMPAT` (which converts Anthropic-format requests on `/v1/messages` into OpenAI calls).
+Adds `/openai/v1/*` endpoints that accept OpenAI-native API formats.
+After model mapping, scoped non-Claude model IDs (`global.`, `us.`, `eu.`,
+`apac.`, `us-gov.`, etc.) default to Bedrock Runtime `/openai/v1/responses`.
+Unscoped models retain the configured endpoint. This selection also applies to
+Anthropic requests on `/v1/messages`, independently of `ENABLE_OPENAI_COMPAT`.
+Set `ENABLE_BEDROCK_RESPONSES=False` to restore previous routing.
+
+The Runtime transport supports a Bedrock API key or AWS SigV4 credentials.
+AWS Mantle URLs select the corresponding Runtime region for scoped IDs; explicit
+custom provider endpoints are honored. The Anthropic conversion keeps the original
+client model name in its response and sends the mapped ID upstream. It uses
+`store=False` and the full conversation on each turn, including tool results.
+Responses SSE events become Anthropic text, thinking, tool argument, and usage
+events as they arrive. An exhausted output budget maps to `stop_reason=max_tokens`.
+
+Runtime rejects `background=True` and does not execute hosted tools. Existing
+proxy web-search loops continue to execute tools locally. Upstream model/parameter
+errors are surfaced without silently switching APIs. Native Responses fields are
+preserved on the Runtime passthrough path. Retrieval routes have no model field:
+configure `OPENAI_BASE_URL` to the Runtime endpoint (or use a provider override)
+when retrieving stored Runtime responses.
 
 ### When to use it
 
@@ -598,7 +618,9 @@ Adds new `/openai/v1/*` endpoints that accept OpenAI-native API formats and call
 ```bash
 ENABLE_OPENAI_PASSTHROUGH=True
 BEDROCK_API_KEY=<your-bedrock-api-key>
-MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-east-1.api.aws/v1
+OPENAI_BASE_URL=https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+# MANTLE_ENDPOINT_URL, if also set, takes precedence over OPENAI_BASE_URL.
+# ENABLE_BEDROCK_RESPONSES=True  # default
 ```
 
 ### Endpoints
