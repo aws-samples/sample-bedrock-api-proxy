@@ -106,7 +106,7 @@ class BedrockToAnthropicConverter:
             content=content,
             model=model,
             stop_reason=stop_reason,
-            stop_sequence=None,  # Bedrock doesn't return the actual stop sequence
+            stop_sequence=bedrock_response.get("_proxy_stop_sequence"),
             usage=usage,
         )
 
@@ -420,7 +420,10 @@ class BedrockToAnthropicConverter:
             events.append(
                 {
                     "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "delta": {
+                        "stop_reason": stop_reason,
+                        "stop_sequence": stop_data.get("_proxy_stop_sequence"),
+                    },
                     "usage": {"output_tokens": 0},  # Will be updated from metadata
                 }
             )

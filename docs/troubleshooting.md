@@ -30,6 +30,74 @@
 - Check that new Anthropic features are mapped in converters
 - Verify model ID mapping exists (or allow passthrough)
 
+### Claude Code with GPT through Bedrock Converse
+
+For deployments using `ENABLE_BEDROCK_RESPONSES=False` and
+`ENABLE_OPENAI_COMPAT=False`, non-Claude requests to `/v1/messages` use
+Converse/ConverseStream. Scoped non-Claude models otherwise default to Runtime
+Responses, whose conversion path is separate. `ENABLE_OPENAI_PASSTHROUGH`
+controls the separate `/openai/v1/*` routes and does not change this path.
+
+The Converse request adapter handles these differences automatically:
+
+- **Inline system messages from Claude Code's mid-conversation-system beta:**
+  moved into Converse's top-level `system` field in their original order,
+  following any existing system instructions. They retain system authority;
+  user and assistant messages keep their order. Non-text inline system content
+  is rejected instead of being silently dropped. Non-empty inline system
+  messages retain their native format on the Claude API path. System messages
+  containing `tool_addition`/`tool_removal` retain the existing InvokeModel-only
+  handling and are still omitted on the Converse path.
+- **MCP tool names longer than 64 characters or containing unsupported characters:**
+  converted to deterministic, collision-checked aliases. Tool definitions,
+  historical tool calls and explicit tool choices use the same alias. Both
+  regular and streaming replies restore the original client tool name. Tool IDs,
+  arguments and results are preserved; mappings are isolated per request.
+- **Empty tool descriptions:** replaced with a description derived from the tool
+  name, satisfying Bedrock's minimum length requirement.
+- **Images returned by tools such as Claude Code `Read`:** GPT Converse rejects
+  images nested inside `toolResult.content`, even when the model accepts direct
+  user images. Images are moved immediately after their tool result within the
+  same user turn. Attachment references preserve the association with each
+  `toolUseId`; image bytes, formats, result status and other result content are
+  retained. This does not add vision support to a text-only model.
+- **GPT assistant prefills:** an empty trailing assistant turn is removed. For a
+  non-empty assistant prefill, its content is retained and a user instruction
+  requests only the continuation. This is a semantic approximation of Anthropic
+  prefilling, not a guarantee of an exact text or JSON prefix. Other model
+  providers retain their existing message behavior.
+- **Missing tool results:** a GPT request ending with an assistant tool call is
+  rejected with `invalid_request_error`; the caller must supply the tool results.
+  The proxy does not synthesize tool execution results.
+- **SDK parameter validation failures:** returned as HTTP 400 for regular
+  requests, or an `invalid_request_error` SSE event after streaming starts,
+  instead of a retryable internal error.
+- **Reasoning history when switching models:** GPT requests omit provider-specific
+  historical reasoning blocks while retaining text, tool calls and tool results.
+  GPT reasoning metadata is not exposed as Claude thinking in replies; streaming
+  content indices remain contiguous. Claude requests omit empty unsigned thinking
+  placeholders, but preserve valid signature-only Fable thinking blocks.
+- **Empty system messages after compaction/resume:** empty inline system turns
+  are omitted on the native Claude path. Non-empty instructions are retained.
+- **GPT `stopSequences` errors (including auto-mode classifier requests):** stop
+  sequences are enforced by the proxy instead of sent to Bedrock GPT. The reply
+  is cut before the first matching sequence, with `stop_reason=stop_sequence`
+  and the matched `stop_sequence`. Subsequent content/tool calls are not returned.
+  Stop-enabled GPT streams buffer the provider response before emitting SSE, so
+  their first content arrives later; usage includes the full provider generation.
+  Streams without stops remain incremental. Classifier prompts, rules and
+  decisions are not overridden.
+
+Use a proxy alias such as `claude-opus-5[1m]` rather than sending that alias
+directly as a Bedrock inference-profile ID. Default mappings are maintained
+in the `model-mappings/` submodule and refreshed by the model mapping sync
+service. Check the active mapping or add a deployment override when an alias
+is missing. The `[1m]` suffix selects the same profile and still relies on the
+client's context-window beta header.
+
+These fixes require rebuilding and deploying the proxy image. Changing a model
+mapping or restarting Claude Code alone does not update server code.
+
 ### Streaming Cuts Off Early
 
 - Check `STREAMING_TIMEOUT` setting

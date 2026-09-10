@@ -27,10 +27,11 @@ from uuid import uuid4
 import boto3
 import httpx
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 
 from app.converters.anthropic_to_bedrock import AnthropicToBedrockConverter
 from app.converters.bedrock_to_anthropic import BedrockToAnthropicConverter
+from app.converters.converse_compat import ConverseRequestAdapter
 from app.core.config import settings
 from app.core.exceptions import BedrockAPIError, map_bedrock_error
 from app.schemas.anthropic import CountTokensRequest, MessageRequest, MessageResponse
@@ -439,6 +440,15 @@ class BedrockService:
                     # Bedrock doesn't understand server_tool_use, web_search_tool_result, etc.
                     block_type = block_dict.get("type", "")
 
+                    # An interrupted/foreign stream can leave an unsigned,
+                    # empty thinking placeholder in restored history. It is
+                    # not a valid Claude block. Preserve signed empty thinking:
+                    # Fable legitimately returns signature-only reasoning.
+                    if (block_type == "thinking"
+                            and not block_dict.get("thinking")
+                            and not block_dict.get("signature")):
+                        continue
+
                     # Fallback audit markers (refusal-fallback flows) are
                     # client-side bookkeeping — strip before forwarding.
                     if block_type == "fallback":
@@ -492,6 +502,19 @@ class BedrockService:
                     content_types = [b.get("type", "?") for b in content_list]
                     print(f"[BEDROCK NATIVE CONVERT] msg[{msg_idx}] assistant content_types: {content_types}")
 
+            if msg.role == "system":
+                content = message_dict["content"]
+                if isinstance(content, list):
+                    content = [
+                        block for block in content
+                        if not (block.get("type") == "text"
+                                and not block.get("text", "").strip())
+                    ]
+                    message_dict["content"] = content
+                if not content or (isinstance(content, str) and not content.strip()):
+                    continue
+            if msg.role == "assistant" and not message_dict["content"]:
+                continue
             native_request["messages"].append(message_dict)
 
         # Add system message
@@ -892,6 +915,11 @@ class BedrockService:
             bedrock_request["serviceTier"] = {"type": effective_service_tier}
 
         try:
+            adapter = ConverseRequestAdapter(
+                bedrock_request,
+                get_inference_profile_resolver().resolve(bedrock_request["modelId"]),
+            )
+            bedrock_request = adapter.request
             print(f"[BEDROCK] Calling Bedrock Converse API...")
 
             # Call Bedrock Converse API
@@ -906,7 +934,7 @@ class BedrockService:
             # Convert response back to Anthropic format
             message_id = request_id or f"msg_{uuid4().hex}"
             anthropic_response = self.bedrock_to_anthropic.convert_response(
-                response, request.model, message_id
+                adapter.restore_response(response), request.model, message_id
             )
 
             print(f"[BEDROCK] Successfully converted response to Anthropic format")
@@ -938,9 +966,13 @@ class BedrockService:
 
                     message_id = request_id or f"msg_{uuid4().hex}"
                     anthropic_response = self.bedrock_to_anthropic.convert_response(
-                        response, request.model, message_id
+                        adapter.restore_response(response), request.model, message_id
                     )
                     return anthropic_response
+                except ParamValidationError as retry_error:
+                    raise map_bedrock_error(
+                        "ValidationException", str(retry_error)
+                    ) from retry_error
                 except ClientError as retry_error:
                     retry_code = retry_error.response["Error"]["Code"]
                     retry_message = retry_error.response["Error"]["Message"]
@@ -953,6 +985,8 @@ class BedrockService:
             # Map Bedrock error to appropriate exception with correct HTTP status
             raise map_bedrock_error(error_code, error_message)
 
+        except ParamValidationError as e:
+            raise map_bedrock_error("ValidationException", str(e)) from e
         except BedrockAPIError:
             # Re-raise our custom exceptions as-is
             raise
@@ -1440,12 +1474,22 @@ class BedrockService:
         }
 
         try:
+            adapter = ConverseRequestAdapter(
+                bedrock_request,
+                get_inference_profile_resolver().resolve(bedrock_request["modelId"]),
+            )
+            bedrock_request = adapter.request
             print(f"[BEDROCK STREAM WORKER] Calling Bedrock ConverseStream API...")
 
-            # Call Bedrock ConverseStream API
-            response = self.get_client(provider_id).converse_stream(**bedrock_request)
+            def invoke_stream():
+                client = self.get_client(provider_id)
+                if adapter.stop_sequences:
+                    # GPT cannot enforce stops upstream. Buffer this request
+                    # so the caller still receives the requested stop semantics.
+                    return adapter.buffered_stream(client.converse(**bedrock_request))
+                return client.converse_stream(**bedrock_request).get("stream")
 
-            stream = response.get("stream")
+            stream = invoke_stream()
             if not stream:
                 print(f"[ERROR] No stream returned from Bedrock")
                 event_queue.put(("error", ("no_stream", "No stream returned from Bedrock")))
@@ -1454,9 +1498,13 @@ class BedrockService:
             print(f"[BEDROCK STREAM WORKER] Processing stream events...")
 
             for bedrock_event in stream:
+                bedrock_event = adapter.restore_event(bedrock_event)
+                if bedrock_event is None:
+                    continue
                 # Process the event and generate SSE strings
                 sse_events = self._process_stream_event(
-                    bedrock_event, request, message_id, current_index, seen_indices, accumulated_usage
+                    bedrock_event, request, message_id,
+                    current_index, seen_indices, accumulated_usage
                 )
 
                 # Update current_index if needed
@@ -1490,12 +1538,15 @@ class BedrockService:
                 bedrock_request.pop("serviceTier", None)
 
                 try:
-                    response = self.get_client(provider_id).converse_stream(**bedrock_request)
-                    stream = response.get("stream")
+                    stream = invoke_stream()
                     if stream:
                         for bedrock_event in stream:
+                            bedrock_event = adapter.restore_event(bedrock_event)
+                            if bedrock_event is None:
+                                continue
                             sse_events = self._process_stream_event(
-                                bedrock_event, request, message_id, current_index, seen_indices, accumulated_usage
+                                bedrock_event, request, message_id,
+                                current_index, seen_indices, accumulated_usage
                             )
                             if "contentBlockStart" in bedrock_event:
                                 current_index = bedrock_event["contentBlockStart"].get(
@@ -1508,11 +1559,18 @@ class BedrockService:
                         print(f"[BEDROCK STREAM WORKER] Retry stream completed")
                         event_queue.put(("done", None))
                         return
+                except ParamValidationError as retry_error:
+                    event_queue.put(("error", ("ValidationException", str(retry_error))))
+                    return
                 except Exception as retry_error:
                     print(f"[ERROR] Retry also failed: {retry_error}")
 
             event_queue.put(("error", (error_code, error_message)))
 
+        except ParamValidationError as e:
+            event_queue.put(("error", ("ValidationException", str(e))))
+        except BedrockAPIError as e:
+            event_queue.put(("error", (e.error_code, e.error_message)))
         except Exception as e:
             print(f"[ERROR] Exception in stream worker: {type(e).__name__}: {e}")
             import traceback
@@ -1720,6 +1778,10 @@ class BedrockService:
         anthropic_events = self.bedrock_to_anthropic.convert_stream_event(
             bedrock_event, request.model, message_id, current_index
         )
+        if "messageStart" in bedrock_event or "messageStop" in bedrock_event:
+            anthropic_events = self.bedrock_to_anthropic.merge_usage_into_events(
+                anthropic_events, accumulated_usage
+            )
 
         # Update accumulated usage from metadata
         if "metadata" in bedrock_event:
