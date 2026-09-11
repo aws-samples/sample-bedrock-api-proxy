@@ -1,3 +1,15 @@
+// Complete replacement document. Omit on unrelated updates; null is not valid.
+export interface AccessPolicyDimension {
+  enabled: boolean;
+  allow: string[];
+}
+
+export interface AccessPolicy {
+  version: 1;
+  ip: AccessPolicyDimension;
+  model: AccessPolicyDimension;
+}
+
 export interface ApiKey {
   api_key: string;
   user_id: string;
@@ -18,6 +30,7 @@ export interface ApiKey {
   routing_strategy?: string;  // cost/quality/auto/off
   compression_strategy?: string;  // aggressive/moderate/conservative/off
   provider_id?: string | null;
+  access_policy?: AccessPolicy;
   created_at: number;
   updated_at?: number;
   // Usage stats (aggregated from usage_stats table)
@@ -40,6 +53,7 @@ export interface ApiKeyCreate {
   routing_strategy?: string;
   compression_strategy?: string;
   provider_id?: string | null;
+  access_policy?: AccessPolicy;
 }
 
 export interface ApiKeyUpdate {
@@ -54,6 +68,7 @@ export interface ApiKeyUpdate {
   routing_strategy?: string;
   compression_strategy?: string;
   provider_id?: string | null;
+  access_policy?: AccessPolicy;
 }
 
 export interface ApiKeyListResponse {

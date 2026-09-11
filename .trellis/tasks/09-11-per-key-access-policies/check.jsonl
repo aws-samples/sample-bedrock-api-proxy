@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"No new quality regressions; verify actual wire calls"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Real table/moto and consistent-read validation"}
+{"file":".trellis/tasks/09-11-per-key-access-policies/prd.md","reason":"Approved R1-R7 and AC1-AC8 acceptance criteria"}
+{"file":".trellis/tasks/09-11-per-key-access-policies/design.md","reason":"Trust, model identity and TTL compatibility boundaries"}

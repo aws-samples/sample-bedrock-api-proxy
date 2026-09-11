@@ -25,6 +25,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.access_policy import AccessPolicyDenied
+from app.services.model_access import preflight_model, model_denial_event
 from app.schemas.anthropic import (
     MessageRequest,
     MessageResponse,
@@ -262,6 +264,7 @@ class StandaloneCodeExecutionService:
         filtered_beta = self._filter_beta_header(anthropic_beta)
         logger.info(f"[Standalone] Filtered beta header: {anthropic_beta} -> {filtered_beta}")
 
+        preflight_model(bedrock_service, request.model)
         # Get or create session
         session = await self._get_or_create_session(container_id)
         logger.info(f"[Standalone] Using session {session.session_id}")
@@ -668,6 +671,7 @@ class StandaloneCodeExecutionService:
         final_stop_reason = "end_turn"
         emitted_message_start = False
 
+        preflight_model(bedrock_service, request.model)
         # Get or create session
         try:
             session = await self._get_or_create_session(container_id)
@@ -718,6 +722,9 @@ class StandaloneCodeExecutionService:
                         iter_request,
                         anthropic_beta=filtered_beta,
                     )
+                except AccessPolicyDenied as exc:
+                    yield model_denial_event(exc)
+                    return
                 except Exception as e:
                     logger.error(f"[Standalone Streaming] Bedrock call failed: {e}")
                     yield self._format_sse_event({

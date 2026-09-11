@@ -6,6 +6,7 @@
  */
 import { fetchAuthSession } from 'aws-amplify/auth';
 import { isAmplifyConfigured } from '../config/amplify';
+import { apiErrorMessage } from '../utils/apiErrors';
 import type {
   ApiKey,
   ApiKeyCreate,
@@ -160,7 +161,7 @@ async function apiFetch<T>(
 
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
     throw new ApiError(
-      error.detail || error.message || `HTTP error! status: ${response.status}`,
+      apiErrorMessage(error.detail || error.message, `HTTP error! status: ${response.status}`),
       response.status
     );
   }

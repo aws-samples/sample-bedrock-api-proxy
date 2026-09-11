@@ -7,7 +7,7 @@ the application with uvicorn.
 Usage:
     python main.py
     or
-    uvicorn main:app --reload
+    uvicorn main:app --reload --no-proxy-headers
 """
 from app.main import app
 
@@ -22,4 +22,5 @@ if __name__ == "__main__":
         reload=settings.reload,
         workers=settings.workers if not settings.reload else 1,
         log_level=settings.log_level.lower(),
+        proxy_headers=False,  # Auth owns the raw transport peer.
     )

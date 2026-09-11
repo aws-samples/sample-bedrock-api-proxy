@@ -5,15 +5,20 @@ Mounted at /openai/v1 only when settings.enable_openai_passthrough is True.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from functools import wraps
 from typing import Any, cast
+from urllib.parse import quote
 from uuid import uuid4
 
 from botocore.credentials import Credentials
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
+from app.api.openai_passthrough.backend_target import resolve_verified_target
 from app.api.openai_passthrough.chat_responses_adapter import (
     MAX_UNSUPPORTED_PARAM_RETRIES,
     chat_request_to_response_request,
@@ -34,20 +39,36 @@ from app.api.openai_passthrough.context_store import (
     get_response_context_store,
 )
 from app.api.openai_passthrough.model_mapping import resolve_model_id
+from app.api.openai_passthrough.response_access import (
+    BackendTarget,
+    ResponseAccessError,
+    ResponseAuthorizationStore,
+    ResponseRegistration,
+)
 from app.api.openai_passthrough.streaming import (
     UpstreamConnectionError,
     open_upstream_stream,
     stream_passthrough_response,
+    stream_retrieved_response,
 )
 from app.api.openai_passthrough.usage_extractor import normalize_usage
 from app.api.openai_passthrough.web_search import (
     OpenAIResponsesWebSearchError,
+    SearchUsageAccess,
     build_message_request,
     build_response_json,
     ensure_web_search_enabled,
     handle_non_streaming_web_search,
     is_responses_web_search_request,
+    record_search_usage_on_failure,
     stream_response_events,
+)
+from app.core.access_policy import (
+    UNRESTRICTED_POLICY,
+    AccessPolicyDenied,
+    ParsedAccessPolicy,
+    policy_from_key_info,
+    require_model,
 )
 from app.core.config import settings
 from app.db.dynamodb import DynamoDBClient, ModelMappingManager, UsageTracker
@@ -59,6 +80,7 @@ from app.services.bedrock_openai import (
     resolve_runtime_base_url,
 )
 from app.services.bedrock_service import BedrockService
+from app.services.model_access import ModelAccessService, PreparedModel
 from app.services.web_search_service import get_web_search_service
 
 logger = logging.getLogger(__name__)
@@ -304,7 +326,294 @@ def _passthrough_extra_headers(request: Request) -> dict[str, str]:
     return extra
 
 
+def _policy(request: Request, key_info: dict[str, Any] | None) -> ParsedAccessPolicy:
+    snapshot = getattr(request.state, "access_policy", None)
+    if isinstance(snapshot, ParsedAccessPolicy):
+        return snapshot
+    # Only direct unit calls / explicit auth-disabled requests use this fallback.
+    # Never interpret an unsuccessful authentication lookup as unrestricted.
+    if key_info is None and settings.require_api_key:
+        raise AccessPolicyDenied("invalid_policy")
+    return policy_from_key_info(key_info)
+
+
+def _access_errors(handler):
+    @wraps(handler)
+    async def wrapped(*args, **kwargs):
+        try:
+            return await handler(*args, **kwargs)
+        except AccessPolicyDenied as exc:
+            request = kwargs.get("request") or next(
+                (value for value in args if isinstance(value, Request)), None
+            )
+            request_id = getattr(request.state, "request_id", None) if request else None
+            logger.warning(
+                "[OPENAI-PASSTHROUGH] access denied reason=%s request_id=%s",
+                exc.reason,
+                request_id,
+            )
+            return JSONResponse(
+                {"error": {"message": str(exc), "type": "permission_error"}},
+                status_code=403,
+            )
+        except ResponseAccessError as exc:
+            return JSONResponse(exc.body(), status_code=exc.status_code)
+
+    return wrapped
+
+
+def _authorization_store() -> ResponseAuthorizationStore:
+    # A separate versioned row in the SAME table, no extra table/cache lifetime.
+    return ResponseAuthorizationStore(_managers()[2].table)
+
+
+async def _verified_target(key_info, model: str, *, native=False) -> BackendTarget:
+    def resolve():
+        manager = _provider_manager() if key_info.get("provider_id") else None
+        return resolve_verified_target(key_info, model, manager, native=native)
+
+    try:
+        return await asyncio.to_thread(resolve)
+    except ResponseAccessError:
+        raise
+    except Exception:
+        raise ResponseAccessError() from None
+
+
+async def _registration(
+    policy,
+    key_info,
+    model,
+    target=None,
+    kind="upstream",
+    *,
+    base_url=None,
+    api_key=None,
+    extensions=None,
+):
+    if target is None and kind == "upstream":
+        try:
+            candidate = await _verified_target(key_info, model)
+            # Legacy resolution can fall back to a default provider. Attribute
+            # only when the verified snapshot matches the actual selected wire.
+            if candidate.base_url + "/responses" == upstream_url(
+                "/responses",
+                base_url=base_url,
+                model=model,
+            ) and candidate.api_key == (
+                settings.openai_api_key if api_key is None else api_key
+            ):
+                expected = candidate.extensions.get("bedrock_credentials")
+                actual = (extensions or {}).get("bedrock_credentials")
+                if (
+                    not candidate.api_key
+                    and key_info.get("provider_id")
+                    and (
+                        expected is None
+                        or actual is None
+                        or expected.get_frozen_credentials()
+                        != actual.get_frozen_credentials()
+                    )
+                ):
+                    raise ResponseAccessError()
+                target = candidate
+        except Exception:
+            if policy.model_enabled:
+                raise
+    registration = ResponseRegistration(
+        _authorization_store(),
+        policy,
+        key_info.get("api_key", ""),
+        model,
+        target.identity if target else None,
+        kind,
+    )
+    registration.target = target
+    return registration
+
+
+async def _authorize_response(response_id, policy, key_info, target=None):
+    if not isinstance(response_id, str) or not response_id:
+        raise ResponseAccessError(404)
+    item = await asyncio.to_thread(
+        _authorization_store().authorize,
+        response_id,
+        api_key=key_info.get("api_key", ""),
+        policy=policy,
+    )
+    # Re-resolve the historical model from configuration, never the alias or an
+    # arbitrary URL in DynamoDB. Credentials and endpoint come from one snapshot.
+    api = item["backend"].get("api")
+    historical = await _verified_target(
+        key_info,
+        item["model"],
+        native=api in ("native", "converse"),
+    )
+    if api == "converse":
+        historical.identity["api"] = "converse"
+    if historical.identity != item["backend"]:
+        raise ResponseAccessError(404)
+    if target is not None and target.identity != historical.identity:
+        raise ResponseAccessError(404)
+    return item, historical
+
+
+async def _check_previous(body, policy, key_info, target, *, proxy=False):
+    if not policy.model_enabled or body.get("previous_response_id") is None:
+        return
+    item, _ = await _authorize_response(
+        body["previous_response_id"],
+        policy,
+        key_info,
+        target,
+    )
+    if (item["kind"] == "proxy") != proxy:
+        raise ResponseAccessError(400)
+
+
+def _restricted_search_service(service, policy, model, target, provider_id):
+    """Pin both the model and the HTTP client for every search iteration."""
+    if target.identity.get("api") == "native":
+        import boto3
+        from botocore.config import Config
+        from botocore.tokens import FrozenAuthToken
+
+        credentials = target.extensions.get("bedrock_credentials")
+        kwargs = {}
+        if credentials is not None:
+            kwargs = {
+                "aws_access_key_id": credentials.access_key,
+                "aws_secret_access_key": credentials.secret_key,
+                "aws_session_token": credentials.token,
+            }
+        elif target.api_key:
+            kwargs = {"aws_access_key_id": "unused", "aws_secret_access_key": "unused"}
+        service.client = boto3.client(
+            "bedrock-runtime",
+            region_name=target.identity["region"],
+            endpoint_url=target.base_url,
+            config=Config(
+                read_timeout=settings.bedrock_timeout,
+                signature_version="bearer" if target.api_key else "v4",
+            ),
+            **kwargs,
+        )
+        if target.api_key:
+            service.client._request_signer._auth_token = FrozenAuthToken(target.api_key)
+        # This private instance must never re-read a provider during the loop.
+        provider_id = None
+        service._default_provider_id = None
+        prepared = PreparedModel(model, "native")
+    else:
+        import httpx
+
+        from app.services.bedrock_openai import BedrockSigV4Auth
+        from app.services.openai_compat_service import OpenAICompatService
+
+        client_options = {}
+        if (
+            is_runtime_url(target.base_url) or is_runtime_model(model)
+        ) and not target.api_key:
+            client_options["http_client"] = httpx.Client(
+                auth=BedrockSigV4Auth(
+                    target.extensions.get("bedrock_credentials"),
+                    target.identity["region"],
+                ),
+                timeout=settings.bedrock_timeout,
+            )
+        # This request-private adapter sends the prepared ID directly; no second
+        # provider lookup/cache or mapping refresh can redirect a continuation.
+        service._openai_compat_service = OpenAICompatService(
+            base_url=target.base_url,
+            api_key=target.api_key or "aws-sigv4",
+            **client_options,
+        )
+        # Match BedrockService's adapter lifetime: held by active invocations,
+        # closed when the request-private service is no longer referenced.
+        import weakref
+
+        weakref.finalize(
+            service._openai_compat_service,
+            service._openai_compat_service.client.close,
+        )
+        prepared = PreparedModel(model, "responses")
+    access = ModelAccessService(service, policy, provider_id)
+    access.bind(model, prepared)
+    return access
+
+
+async def _legacy_search_registration(
+    service, request, key_info, registration, provider_id
+):
+    """Best-effort attribution using the actual legacy adapter, not a guessed ID."""
+    model = request.model
+
+    def prepare():
+        prepared = service.prepare_model(model, UNRESTRICTED_POLICY)
+        # Legacy native search uses the default client, not the key's provider.
+        # Record that actual backend; a later restricted request will reject a
+        # mismatch instead of sending its saved ID to the associated provider.
+        boto_api = prepared.api in ("native", "converse")
+        target_key = {**key_info, "provider_id": None} if boto_api else key_info
+        target = resolve_verified_target(
+            target_key,
+            prepared.target,
+            _provider_manager() if target_key.get("provider_id") else None,
+            native=boto_api,
+        )
+        if boto_api:
+            if service.client.meta.endpoint_url.rstrip("/") != target.base_url:
+                return None
+            target.identity["api"] = prepared.api
+        else:
+            # Resolve the concrete adapter once, then retain it for the loop.
+            route = service._openai_route(request, provider_id, prepared)
+            if route is None:
+                return None
+            adapter, responses, _ = route
+            if (
+                not responses
+                or str(adapter.client.base_url).rstrip("/") != target.base_url
+            ):
+                return None
+            if target.api_key:
+                if adapter.client.api_key != target.api_key:
+                    return None
+            else:
+                auth = adapter.client._client.auth
+                actual = getattr(auth, "credentials", None)
+                expected = target.extensions.get("bedrock_credentials")
+                if expected is not None and (
+                    actual is None
+                    or actual.get_frozen_credentials()
+                    != expected.get_frozen_credentials()
+                ):
+                    return None
+                if adapter.client.api_key != "aws-sigv4":
+                    return None
+            service._openai_compat_service = adapter
+            prepared = PreparedModel(prepared.target, "responses")
+        access = ModelAccessService(
+            service, UNRESTRICTED_POLICY, None if boto_api else provider_id
+        )
+        access.bind(model, prepared)
+        return access, target, prepared.target
+
+    try:
+        result = await asyncio.to_thread(prepare)
+        if result is not None:
+            access, target, actual_model = result
+            registration.backend = target.identity
+            registration.model = actual_model
+            return access, registration
+    except Exception:
+        pass
+    logger.warning("[OPENAI-PASSTHROUGH] proxy response attribution unavailable")
+    return service, registration
+
+
 @router.post("/chat/completions")
+@_access_errors
 async def chat_completions(
     request: Request,
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
@@ -312,6 +621,8 @@ async def chat_completions(
     body = await request.json()
     mapping, _, _ = _managers()
     body["model"] = resolve_model_id(body.get("model", ""), mapping)
+    policy = _policy(request, api_key_info)
+    require_model(policy, body["model"])
     upstream_body = chat_request_to_response_request(body)
     pre_stripped = strip_learned_unsupported_params(upstream_body)
     if pre_stripped:
@@ -323,10 +634,18 @@ async def chat_completions(
         )
     extra = _passthrough_extra_headers(request)
     extensions: dict[str, Any] = {}
+    target = None
+    base_url: str | None
+    api_key: str | None
     try:
-        base_url, api_key = _resolve_upstream_target(
-            api_key_info, model=body["model"], extensions=extensions
-        )
+        if policy.model_enabled:
+            target = await _verified_target(api_key_info, body["model"])
+            base_url, api_key = target.base_url, target.api_key
+            extensions = target.extensions
+        else:
+            base_url, api_key = _resolve_upstream_target(
+                api_key_info, model=body["model"], extensions=extensions
+            )
     except UpstreamProviderError as exc:
         return _api_error_response(exc)
     _info_log_upstream_request(
@@ -337,9 +656,28 @@ async def chat_completions(
         base_url=base_url,
     )
 
+    await _check_previous(body, policy, api_key_info, target)
+    registration = await _registration(
+        policy,
+        api_key_info,
+        body["model"],
+        target,
+        base_url=base_url,
+        api_key=api_key,
+        extensions=extensions,
+    )
+    if target is None and registration.target is not None:
+        # Identical legacy destination/credentials, now pinned against refresh.
+        target = registration.target
+        base_url, api_key, extensions = (
+            target.base_url,
+            target.api_key,
+            target.extensions,
+        )
     if body.get("stream"):
         retries_left = MAX_UNSUPPORTED_PARAM_RETRIES
         while True:
+            require_model(policy, upstream_body.get("model", ""))
             try:
                 upstream_resp, error_body = await open_upstream_stream(
                     "POST",
@@ -349,6 +687,11 @@ async def chat_completions(
                     base_url=base_url,
                     api_key=api_key,
                     extensions=extensions,
+                    **(
+                        {"resolved_url": target.base_url + "/responses"}
+                        if target
+                        else {}
+                    ),
                 )
             except UpstreamConnectionError as exc:
                 return JSONResponse(
@@ -399,17 +742,23 @@ async def chat_completions(
                 upstream_resp,
                 model=body["model"],
                 on_complete=on_complete,
+                on_response_id=registration,
             ),
             media_type="text/event-stream",
         )
 
     retries_left = MAX_UNSUPPORTED_PARAM_RETRIES
     while True:
+        require_model(policy, upstream_body.get("model", ""))
         resp = await get_client().post(
-            upstream_url(
-                "/responses",
-                base_url=base_url,
-                model=upstream_body.get("model"),
+            (
+                target.base_url + "/responses"
+                if target
+                else upstream_url(
+                    "/responses",
+                    base_url=base_url,
+                    model=upstream_body.get("model"),
+                )
             ),
             json=upstream_body,
             headers=upstream_headers(extra, api_key=api_key),
@@ -449,10 +798,12 @@ async def chat_completions(
     )
     if isinstance(data, dict) and isinstance(data.get("usage"), dict):
         _record_usage(api_key_info, data["usage"], body["model"], "chat_completions")
+    await registration.json(data)
     return JSONResponse(chat_data, status_code=resp.status_code)
 
 
 @router.post("/responses")
+@_access_errors
 async def responses_create(
     request: Request,
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
@@ -460,12 +811,32 @@ async def responses_create(
     body = await request.json()
     mapping, _, context_store = _managers()
     body["model"] = resolve_model_id(body.get("model", ""), mapping)
+    policy = _policy(request, api_key_info)
+    require_model(policy, body["model"])
+    native_search = False
+    if policy.model_enabled and is_responses_web_search_request(body):
+        from app.services.inference_profile_resolver import (
+            get_inference_profile_resolver,
+        )
+
+        resolved = get_inference_profile_resolver().resolve(body["model"]).lower()
+        native_search = "anthropic" in resolved or "claude" in resolved
     extra = _passthrough_extra_headers(request)
     extensions: dict[str, Any] = {}
+    target = None
+    base_url: str | None
+    api_key: str | None
     try:
-        base_url, api_key = _resolve_upstream_target(
-            api_key_info, model=body["model"], extensions=extensions
-        )
+        if policy.model_enabled:
+            target = await _verified_target(
+                api_key_info, body["model"], native=native_search
+            )
+            base_url, api_key = target.base_url, target.api_key
+            extensions = target.extensions
+        else:
+            base_url, api_key = _resolve_upstream_target(
+                api_key_info, model=body["model"], extensions=extensions
+            )
     except UpstreamProviderError as exc:
         return _api_error_response(exc)
     runtime_request = (
@@ -519,7 +890,26 @@ async def responses_create(
         base_url=base_url,
     )
 
-    if is_responses_web_search_request(body):
+    proxy_response = is_responses_web_search_request(body)
+    await _check_previous(body, policy, api_key_info, target, proxy=proxy_response)
+    registration = await _registration(
+        policy,
+        api_key_info,
+        body["model"],
+        target,
+        kind="proxy" if proxy_response else "upstream",
+        base_url=base_url,
+        api_key=api_key,
+        extensions=extensions,
+    )
+    if target is None and registration.target is not None:
+        target = registration.target
+        base_url, api_key, extensions = (
+            target.base_url,
+            target.api_key,
+            target.extensions,
+        )
+    if proxy_response:
         request_id = f"resp-{uuid4().hex}"
         service_tier = api_key_info.get("service_tier", "default")
         # Capture the per-key provider creds before `api_key` is reassigned to
@@ -541,11 +931,14 @@ async def responses_create(
                     status_code=400,
                 )
             try:
-                previous_messages = context_store.load(
+                previous_messages = await asyncio.to_thread(
+                    context_store.load,
                     previous_response_id,
                     api_key=api_key,
                 )
             except ResponseContextNotFound:
+                if policy.model_enabled:
+                    raise ResponseAccessError(404) from None
                 return JSONResponse(
                     {
                         "error": {
@@ -558,6 +951,10 @@ async def responses_create(
                     },
                     status_code=404,
                 )
+            except Exception:
+                if policy.model_enabled:
+                    raise ResponseAccessError() from None
+                raise
 
         try:
             ensure_web_search_enabled()
@@ -579,18 +976,51 @@ async def responses_create(
                 openai_use_responses=True,
                 **provider_context,
             )
+            if policy.model_enabled:
+                bedrock_service = await asyncio.to_thread(
+                    _restricted_search_service,
+                    bedrock_service,
+                    policy,
+                    body["model"],
+                    target,
+                    api_key_info.get("provider_id"),
+                )
+            else:
+                # Attribute legacy-created proxy IDs too, so enabling a policy
+                # later can verify them. Only pin when the existing adapter and
+                # verified configuration agree; never change a legacy fallback.
+                bedrock_service, registration = await _legacy_search_registration(
+                    bedrock_service,
+                    message_request,
+                    api_key_info,
+                    registration,
+                    provider_context.get("provider_id"),
+                )
+        except (AccessPolicyDenied, ResponseAccessError):
+            raise
         except Exception as exc:
             return _api_error_response(exc)
 
+        if isinstance(bedrock_service, ModelAccessService):
+            bedrock_service = SearchUsageAccess.wrap(bedrock_service)
+
+        def record_observed_usage(usage):
+            _record_usage(api_key_info, usage, body["model"], "responses")
+
         if body.get("stream"):
             try:
-                response = await web_search_service.handle_request(
-                    request=message_request,
-                    bedrock_service=bedrock_service,
-                    request_id=request_id,
-                    service_tier=service_tier,
-                    anthropic_beta=None,
-                )
+                with record_search_usage_on_failure(
+                    bedrock_service, record_observed_usage
+                ):
+                    response = await web_search_service.handle_request(
+                        request=message_request,
+                        bedrock_service=bedrock_service,
+                        request_id=request_id,
+                        service_tier=service_tier,
+                        anthropic_beta=None,
+                    )
+            except (AccessPolicyDenied, ResponseAccessError):
+                raise
             except Exception as exc:
                 return _api_error_response(exc)
 
@@ -605,8 +1035,12 @@ async def responses_create(
                 body=data,
                 stream=True,
             )
+            if isinstance(data.get("usage"), dict):
+                _record_usage(api_key_info, data["usage"], body["model"], "responses")
+            await registration.json(data)
             try:
-                context_store.save(
+                await asyncio.to_thread(
+                    context_store.save,
                     response_id=data["id"],
                     api_key=api_key,
                     request=message_request,
@@ -619,9 +1053,6 @@ async def responses_create(
                     "[OPENAI-PASSTHROUGH] context storage failed: %s",
                     exc,
                 )
-            if isinstance(data.get("usage"), dict):
-                _record_usage(api_key_info, data["usage"], body["model"], "responses")
-
             return StreamingResponse(
                 stream_response_events(
                     response,
@@ -633,16 +1064,19 @@ async def responses_create(
             )
 
         try:
-            data = await handle_non_streaming_web_search(
-                body,
-                message_request=message_request,
-                web_search_service=web_search_service,
-                bedrock_service=bedrock_service,
-                request_id=request_id,
-                service_tier=service_tier,
-            )
+            with record_search_usage_on_failure(bedrock_service, record_observed_usage):
+                data = await handle_non_streaming_web_search(
+                    body,
+                    message_request=message_request,
+                    web_search_service=web_search_service,
+                    bedrock_service=bedrock_service,
+                    request_id=request_id,
+                    service_tier=service_tier,
+                )
         except OpenAIResponsesWebSearchError as exc:
             return JSONResponse(exc.to_error_body(), status_code=exc.status_code)
+        except (AccessPolicyDenied, ResponseAccessError):
+            raise
         except Exception as exc:
             return _api_error_response(exc)
         _info_log_upstream_response(
@@ -650,8 +1084,12 @@ async def responses_create(
             status_code=200,
             body=data,
         )
+        if isinstance(data.get("usage"), dict):
+            _record_usage(api_key_info, data["usage"], body["model"], "responses")
+        await registration.json(data)
         try:
-            context_store.save(
+            await asyncio.to_thread(
+                context_store.save,
                 response_id=data["id"],
                 api_key=api_key,
                 request=message_request,
@@ -661,10 +1099,9 @@ async def responses_create(
             logger.warning("[OPENAI-PASSTHROUGH] context not stored: %s", exc)
         except Exception as exc:
             logger.warning("[OPENAI-PASSTHROUGH] context storage failed: %s", exc)
-        if isinstance(data.get("usage"), dict):
-            _record_usage(api_key_info, data["usage"], body["model"], "responses")
         return JSONResponse(data, status_code=200)
 
+    require_model(policy, body.get("model", ""))
     if body.get("stream"):
         try:
             upstream_resp, error_body = await open_upstream_stream(
@@ -675,6 +1112,7 @@ async def responses_create(
                 base_url=base_url,
                 api_key=api_key,
                 extensions=extensions,
+                **({"resolved_url": target.base_url + "/responses"} if target else {}),
             )
         except UpstreamConnectionError as exc:
             return JSONResponse(
@@ -703,12 +1141,21 @@ async def responses_create(
             _record_usage(api_key_info, usage, body["model"], "responses")
 
         return StreamingResponse(
-            stream_passthrough_response(upstream_resp, "responses", on_complete),
+            stream_passthrough_response(
+                upstream_resp,
+                "responses",
+                on_complete,
+                on_response_id=registration,
+            ),
             media_type="text/event-stream",
         )
 
     resp = await get_client().post(
-        upstream_url("/responses", base_url=base_url, model=body.get("model")),
+        (
+            target.base_url + "/responses"
+            if target
+            else upstream_url("/responses", base_url=base_url, model=body.get("model"))
+        ),
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
         extensions=extensions,
@@ -732,15 +1179,30 @@ async def responses_create(
     )
     if isinstance(data, dict) and isinstance(data.get("usage"), dict):
         _record_usage(api_key_info, data["usage"], body["model"], "responses")
+    await registration.json(data)
     return JSONResponse(data, status_code=resp.status_code)
 
 
+@_access_errors
 async def _passthrough_request(
-    request: Request, path: str, api_key_info: dict[str, Any] | None = None
+    request: Request,
+    path: str,
+    api_key_info: dict[str, Any] | None = None,
+    response_id: str | None = None,
 ) -> Response:
     """Forward request to upstream and mirror the upstream response."""
     extra = _passthrough_extra_headers(request)
-    base_url, api_key = _resolve_upstream_target(api_key_info)
+    policy = _policy(request, api_key_info)
+    item = None
+    extensions: dict[str, Any] = {}
+    if policy.model_enabled and response_id is not None:
+        item, target = await _authorize_response(response_id, policy, api_key_info)
+        if item["kind"] == "proxy":
+            raise ResponseAccessError(400)
+        base_url, api_key = target.base_url, target.api_key
+        extensions = target.extensions
+    else:
+        base_url, api_key = _resolve_upstream_target(api_key_info)
     body = None
     if request.method in ("POST", "PUT", "PATCH"):
         try:
@@ -753,16 +1215,66 @@ async def _passthrough_request(
         body=body,
         base_url=base_url,
     )
-    resp = await get_client().request(
-        request.method,
-        upstream_url(
+    # Restricted CRUD never uses a body model to re-select its historical URL.
+    url = (
+        base_url + path
+        if item is not None
+        else upstream_url(
             path,
             base_url=base_url,
             model=body.get("model") if isinstance(body, dict) else None,
-        ),
+        )
+    )
+    if (
+        item is not None
+        and response_id is not None
+        and request.method == "GET"
+        and path == f"/responses/{quote(response_id, safe='')}"
+        and request.query_params.get("stream", "").lower() == "true"
+    ):
+        try:
+            resp, error_body = await open_upstream_stream(
+                request.method,
+                path,
+                None,
+                extra,
+                api_key=api_key,
+                extensions=extensions,
+                resolved_url=url,
+                params=str(request.query_params),
+            )
+        except UpstreamConnectionError as exc:
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": "upstream retrieval failed",
+                        "type": "upstream_error",
+                    }
+                },
+                status_code=exc.status_code,
+            )
+        if error_body is not None:
+            return JSONResponse(
+                _decode_error_body(error_body), status_code=resp.status_code
+            )
+        return StreamingResponse(
+            stream_retrieved_response(resp),
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type", "text/event-stream"),
+            background=BackgroundTask(resp.aclose),
+        )
+    options: dict[str, Any] = {}
+    if item is not None:
+        options.update(extensions=extensions, params=request.query_params)
+    resp = await get_client().request(
+        request.method,
+        url,
         json=body,
         headers=upstream_headers(extra, api_key=api_key),
+        **options,
     )
+    if item is not None and request.method == "DELETE" and resp.status_code < 400:
+        await asyncio.to_thread(_authorization_store().mark_deleted, item)
     if resp.headers.get("content-type", "").startswith("application/json"):
         response_body: Any = _safe_json(resp)
     else:
@@ -787,7 +1299,7 @@ async def responses_get_or_delete(
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
 ):
     return await _passthrough_request(
-        request, f"/responses/{response_id}", api_key_info
+        request, f"/responses/{quote(response_id, safe='')}", api_key_info, response_id
     )
 
 
@@ -798,7 +1310,10 @@ async def responses_cancel(
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
 ):
     return await _passthrough_request(
-        request, f"/responses/{response_id}/cancel", api_key_info
+        request,
+        f"/responses/{quote(response_id, safe='')}/cancel",
+        api_key_info,
+        response_id,
     )
 
 
@@ -809,16 +1324,90 @@ async def responses_input_items(
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
 ):
     return await _passthrough_request(
-        request, f"/responses/{response_id}/input_items", api_key_info
+        request,
+        f"/responses/{quote(response_id, safe='')}/input_items",
+        api_key_info,
+        response_id,
     )
 
 
 @router.get("/models")
+@_access_errors
 async def list_models(
     request: Request,
     api_key_info: dict[str, Any] = Depends(get_api_key_info),
 ):
-    return await _passthrough_request(request, "/models", api_key_info)
+    policy = _policy(request, api_key_info)
+    if not policy.model_enabled:
+        return await _passthrough_request(request, "/models", api_key_info)
+    mapping, _, _ = _managers()
+    base_url, api_key = _resolve_upstream_target(api_key_info)
+    params = dict(request.query_params)
+    params.pop("after", None)
+    params.pop("limit", None)
+    entries: list[dict[str, Any]] = []
+    cursors: set[str] = set()
+    template = None
+    # Filter before local pagination. Retaining an upstream last_id would leak
+    # forbidden IDs, while dropping it would make an empty filtered page unusable.
+    while True:
+        resp = await get_client().get(
+            upstream_url("/models", base_url=base_url),
+            params=params,
+            headers=upstream_headers(
+                _passthrough_extra_headers(request), api_key=api_key
+            ),
+        )
+        data = _safe_json(resp)
+        if resp.status_code >= 400:
+            return JSONResponse(data, status_code=resp.status_code)
+        if template is None:
+            template = dict(data)
+        page = data.get("data", [])
+        entries.extend(
+            entry
+            for entry in page
+            if isinstance(entry, dict)
+            and isinstance(entry.get("id"), str)
+            and policy.allows_model(resolve_model_id(entry["id"], mapping))
+        )
+        if not data.get("has_more"):
+            break
+        cursor = data.get("last_id") or (page[-1].get("id") if page else None)
+        if not cursor or cursor in cursors or len(cursors) >= 100:
+            raise ResponseAccessError()
+        cursors.add(cursor)
+        params["after"] = cursor
+    total = len(entries)
+    after = request.query_params.get("after")
+    if after:
+        index = next(
+            (i for i, entry in enumerate(entries) if entry["id"] == after), None
+        )
+        if index is None:
+            raise ResponseAccessError(404)
+        entries = entries[index + 1 :]
+    limit = request.query_params.get("limit")
+    try:
+        size = int(limit) if limit is not None else len(entries)
+        if size < 1 and limit is not None:
+            raise ValueError()
+    except ValueError:
+        return JSONResponse(
+            {"error": {"message": "Invalid limit", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+    visible = entries[:size]
+    template["data"] = visible
+    if "has_more" in template:
+        template["has_more"] = len(entries) > size
+    for name, index in (("first_id", 0), ("last_id", -1)):
+        if name in template:
+            template[name] = visible[index]["id"] if visible else None
+    for name in ("count", "total"):
+        if name in template:
+            template[name] = len(visible) if name == "count" else total
+    return JSONResponse(template, status_code=resp.status_code)
 
 
 def _safe_json(resp) -> dict[str, Any]:

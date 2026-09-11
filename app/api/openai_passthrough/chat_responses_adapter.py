@@ -14,6 +14,14 @@ from typing import Any
 
 import httpx
 
+from app.api.openai_passthrough.response_access import (
+    ResponseAccessError,
+    ResponseRegistration,
+    registered_sse_lines,
+    response_id_from_payload,
+)
+from app.api.openai_passthrough.usage_extractor import try_extract_usage_from_sse
+
 # Learned per-model unsupported params: model -> {param: learned_at (monotonic)}.
 # Populated when upstream 400s with unsupported_parameter/unknown_parameter so
 # subsequent requests strip the param proactively instead of paying the 400
@@ -680,6 +688,7 @@ async def stream_responses_as_chat_completions(
     *,
     model: str,
     on_complete: Callable[[dict[str, Any]], Awaitable[None] | None],
+    on_response_id: Callable[[str], Awaitable[None]] | None = None,
 ) -> AsyncIterator[bytes]:
     """Convert an upstream Responses SSE stream to Chat Completions SSE."""
     response_id = f"chatcmpl-{int(time.time())}"
@@ -687,14 +696,40 @@ async def stream_responses_as_chat_completions(
     created = int(time.time())
     usage: dict[str, Any] = {}
     done_sent = False
+    restricted = (
+        isinstance(on_response_id, ResponseRegistration)
+        and on_response_id.policy.model_enabled
+    )
+    registered_id = False
 
     try:
-        async for raw_line in resp.aiter_lines():
+        async for raw_line in registered_sse_lines(
+            resp,
+            on_response_id,
+            lambda line: (
+                try_extract_usage_from_sse(line, usage, "responses")
+                if on_response_id is not None
+                else None
+            ),
+            normalize=True,
+        ):
             payload = _load_sse_data(raw_line)
             if payload is None:
                 continue
 
             event_type = payload.get("type")
+            if restricted:
+                observed_id = response_id_from_payload(payload)
+                if observed_id:
+                    response_id = observed_id
+                    registered_id = True
+                if not registered_id and event_type in {
+                    "response.created",
+                    "response.output_text.delta",
+                    "response.completed",
+                }:
+                    # Never expose an invented, unattributed chat ID.
+                    raise ResponseAccessError()
             if event_type == "response.created":
                 response_obj = payload.get("response") or {}
                 if isinstance(response_obj, dict):
@@ -764,13 +799,14 @@ async def stream_responses_as_chat_completions(
 
         if not done_sent:
             yield b"data: [DONE]\n\n"
+    except ResponseAccessError as exc:
+        yield _chat_sse(exc.body())
     finally:
         await resp.aclose()
-
-    if usage:
-        result = on_complete(usage)
-        if hasattr(result, "__await__"):
-            await result  # type: ignore[misc]
+        if usage:
+            result = on_complete(usage)
+            if hasattr(result, "__await__"):
+                await result  # type: ignore[misc]
 
 
 def _convert_chat_message(

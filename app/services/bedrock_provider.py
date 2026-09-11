@@ -9,6 +9,7 @@ import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.core.config import settings
+from app.services.model_access import ModelAccessService
 from app.services.provider_base import LLMProvider, ProviderResponse
 from app.schemas.anthropic import MessageRequest, MessageResponse
 from app.services.inference_profile_resolver import (
@@ -40,9 +41,16 @@ class BedrockProvider(LLMProvider):
         anthropic_beta = kwargs.get("anthropic_beta")
         cache_ttl = kwargs.get("cache_ttl")
         request_id = kwargs.get("request_id")
+        service = self._service
+        access = kwargs.get("model_access")
+        if isinstance(access, ModelAccessService):
+            # Restricted-only repair: historically model_id was ignored. Keep
+            # the request name for responses; bind it to the selected wire target.
+            service = ModelAccessService(self._service, access.policy, access.provider_id)
+            service.bind(request.model, access.prepare(model_id))
 
         start = time.monotonic()
-        response = await self._service.invoke_model(
+        response = await service.invoke_model(
             request,
             request_id=request_id,
             service_tier=service_tier,
@@ -69,8 +77,15 @@ class BedrockProvider(LLMProvider):
         anthropic_beta = kwargs.get("anthropic_beta")
         cache_ttl = kwargs.get("cache_ttl")
         request_id = kwargs.get("request_id")
+        service = self._service
+        access = kwargs.get("model_access")
+        if isinstance(access, ModelAccessService):
+            # Restricted-only repair: historically model_id was ignored. Keep
+            # the request name for responses; bind it to the selected wire target.
+            service = ModelAccessService(self._service, access.policy, access.provider_id)
+            service.bind(request.model, access.prepare(model_id))
 
-        async for chunk in self._service.invoke_model_stream(
+        async for chunk in service.invoke_model_stream(
             request,
             request_id=request_id,
             service_tier=service_tier,

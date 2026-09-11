@@ -13,6 +13,9 @@ import {
 import type { ApiKey, ApiKeyCreate, ApiKeyUpdate } from '../types';
 import { formatTokens, cacheHitRate, formatCacheHitRate } from '../utils';
 import UsageHoverChart from '../components/UsageHoverChart';
+import AccessPolicyEditor, { AccessPolicyBadges } from '../components/AccessPolicyEditor';
+import { useModelMappings } from '../hooks/useModelMapping';
+import { draftPolicy, policyDraft, validatePolicy, type PolicyIssue } from '../utils/accessPolicy';
 
 // Modal Component
 function Modal({
@@ -57,13 +60,18 @@ function ApiKeyForm({
   isLoading,
 }: {
   initialData?: ApiKey;
-  onSubmit: (data: ApiKeyCreate | ApiKeyUpdate) => void;
+  onSubmit: (data: ApiKeyCreate | ApiKeyUpdate) => Promise<void>;
   onCancel: () => void;
   isLoading: boolean;
 }) {
   const { t } = useTranslation();
   const isEdit = !!initialData;
   const { data: providersData } = useProviders();
+  const mappings = useModelMappings();
+  const [policy, setPolicy] = useState(() => policyDraft(initialData?.access_policy));
+  const [policyTouched, setPolicyTouched] = useState(false);
+  const [policyIssue, setPolicyIssue] = useState<PolicyIssue>();
+  const [saveError, setSaveError] = useState<string>();
 
   const [formData, setFormData] = useState({
     user_id: initialData?.user_id || '',
@@ -79,13 +87,25 @@ function ApiKeyForm({
     provider_id: initialData?.provider_id || '',
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(undefined);
+    // Omit untouched policy on edits (including legacy keys). An explicit toggle
+    // off still submits a complete disabled object, retaining the stored lists.
+    const accessPolicy = policyTouched ? draftPolicy(policy) : undefined;
+    const issue = accessPolicy && validatePolicy(accessPolicy);
+    setPolicyIssue(issue);
+    if (issue) return;
     const submitData = {
       ...formData,
       provider_id: formData.provider_id || null,
+      ...(accessPolicy ? { access_policy: accessPolicy } : {}),
     };
-    onSubmit(submitData);
+    try {
+      await onSubmit(submitData);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : t('apiKeys.policy.saveFailed'));
+    }
   };
 
   return (
@@ -225,6 +245,27 @@ function ApiKeyForm({
       </div>
 
       {/* TODO: Routing Strategy and Compression Strategy hidden — re-enable after optimization */}
+
+      <AccessPolicyEditor
+        value={policy}
+        onChange={(value) => {
+          setPolicy(value);
+          setPolicyTouched(true);
+          setPolicyIssue(undefined);
+          setSaveError(undefined);
+        }}
+        mappings={mappings.data?.items ?? []}
+        mappingsLoading={mappings.isPending}
+        mappingsError={mappings.isError}
+        onRetryMappings={() => { void mappings.refetch(); }}
+        issue={policyIssue}
+      />
+      {saveError && (
+        <div role="alert" className="text-sm text-red-300 whitespace-pre-wrap break-words">
+          <p className="font-medium">{t('apiKeys.policy.saveFailed')}</p>
+          <p>{saveError}</p>
+        </div>
+      )}
 
       <div className="flex gap-3 mt-4">
         <button
@@ -687,6 +728,7 @@ export default function ApiKeys() {
                               </span>
                             </button>
                           </div>
+                          <AccessPolicyBadges policy={key.access_policy} />
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

@@ -59,7 +59,8 @@ class AnthropicToBedrockConverter:
         return settings.default_model_mapping
 
     def convert_request(
-        self, request: MessageRequest, anthropic_beta: Optional[str] = None
+        self, request: MessageRequest, anthropic_beta: Optional[str] = None,
+        *, resolved_model_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         Convert Anthropic MessageRequest to Bedrock Converse request format.
@@ -77,7 +78,7 @@ class AnthropicToBedrockConverter:
             print(f"  - Messages: {len(request.messages)}")
 
             # Convert and cache the model ID
-            self._resolved_model_id = self._convert_model_id(request.model)
+            self._resolved_model_id = resolved_model_id if resolved_model_id is not None else self._convert_model_id(request.model)
 
             bedrock_request = {
                 "modelId": self._resolved_model_id,
