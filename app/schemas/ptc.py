@@ -182,6 +182,9 @@ class PTCExecutionState(BaseModel):
     # Preserve original request context for finalization
     original_system: Optional[Any] = None  # Original system message
     original_model: Optional[str] = None
+    # Exact historical target/API, never an earlier request's policy snapshot.
+    original_target: str | None = None
+    original_api: Literal["native", "converse", "runtime", "chat", "responses"] | None = None
     original_max_tokens: Optional[int] = None
     original_temperature: Optional[float] = None
     original_top_p: Optional[float] = None

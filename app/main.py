@@ -425,4 +425,5 @@ if __name__ == "__main__":
         reload=settings.reload,
         workers=settings.workers,
         log_level=settings.log_level.lower(),
+        proxy_headers=False,  # Auth owns the raw transport peer.
     )

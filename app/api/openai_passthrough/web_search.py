@@ -10,7 +10,8 @@ import json
 import math
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -19,6 +20,46 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.schemas.anthropic import Message, MessageRequest, MessageResponse
 from app.schemas.web_search import UserLocation
+from app.services.model_access import ModelAccessService
+
+
+@dataclass(frozen=True)
+class SearchUsageAccess(ModelAccessService):
+    """Observe completed nested calls without billing the aggregate twice.
+
+    The route uses these totals only if orchestration fails before returning its
+    aggregate. Snapshot numbers immediately: the returned response may be mutated
+    by later tool iterations. This facade remains request-local.
+    """
+
+    observed_usage: dict[str, int] = field(default_factory=dict)
+
+    @classmethod
+    def wrap(cls, access: ModelAccessService) -> SearchUsageAccess:
+        observed = cls(access.service, access.policy, access.provider_id)
+        observed._targets.update(access._targets)
+        return observed
+
+    async def invoke_model(self, request, *args, **kwargs):
+        response = await super().invoke_model(request, *args, **kwargs)
+        if response.usage:
+            for name in ("input_tokens", "output_tokens"):
+                self.observed_usage[name] = self.observed_usage.get(name, 0) + int(
+                    getattr(response.usage, name, 0) or 0
+                )
+        return response
+
+
+@contextmanager
+def record_search_usage_on_failure(service, record):
+    """Do not lose already observed usage when the loop cannot return totals."""
+    try:
+        yield
+    except BaseException:
+        if isinstance(service, SearchUsageAccess) and service.observed_usage:
+            record(service.observed_usage)
+        raise
+
 
 OPENAI_WEB_SEARCH_TOOL_TYPES = {"web_search", "web_search_preview"}
 

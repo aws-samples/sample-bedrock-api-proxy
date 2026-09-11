@@ -99,6 +99,74 @@ return [self._from_item(i) for i in response.get("Items", [])]   # float/int/boo
 
 ---
 
+## Scenario: API-key access-policy documents (v1 groundwork)
+
+### 1. Scope / Trigger
+- `access_policy` is an optional document on the existing API-key item. The shared
+  schema/evaluator and admin persistence are implemented; endpoint enforcement is
+  a separate implementation slice. Do not activate policies on partial deployments.
+
+### 2. Signatures
+- `app.schemas.access_policy.AccessPolicy.model_validate(value)` validates writes.
+- `parse_stored_access_policy(value: object) -> AccessPolicy` accepts DynamoDB's
+  `Decimal(1)` version; ordinary write validation requires an actual integer.
+- `APIKeyManager.create_api_key(..., access_policy=...)` and
+  `update_api_key(..., access_policy=...)` accept whole documents. Omit the argument
+  to preserve legacy/existing state; explicit `None` raises `ValidationError`.
+- `app.core.access_policy.policy_from_key_info(key_info) -> ParsedAccessPolicy`;
+  `require_model(policy, target_model) -> None`; `require_ip(policy, source_ip) -> None`.
+
+### 3. Contracts
+- Shape: `{version: 1, ip: {enabled: bool, allow: string[]},
+  model: {enabled: bool, allow: string[]}}`. All fields required, extras forbidden.
+- Missing policy is unrestricted. Present null/corrupt/unknown versions are not
+  legacy. Admin responses omit the field on legacy items rather than emit null.
+- Both lists are bounded to 100 entries before deduplication; model IDs to 2048
+  characters; compact UTF-8 JSON to 64 KiB before and after normalization.
+- Individual IPs become host CIDRs, host-bit CIDRs are rejected. Mapped IPv6 rules
+  within `::ffff:0:0/96` become IPv4 rules, and mapped peers become IPv4 peers.
+  Native IPv6 ranges (including `::/0`) do not authorize IPv4 implicitly.
+- Model IDs are exact and case-sensitive; no alias resolution or pattern matching.
+- Runtime snapshots contain only immutable primitives/tuples/frozensets. Auth
+  cache still stores deep-copied key data, not IP authorization outcomes.
+- Validation cache misses and post-reactivation reads use `ConsistentRead=True`.
+
+### 4. Validation & Error Matrix
+- Admin malformed/null/unknown/empty-enabled policy -> HTTP 422, no write.
+- Invalid direct manager write -> `ValidationError`, no write.
+- Corrupt runtime document -> `AccessPolicyDenied(reason="invalid_policy")`.
+- Forbidden target/address -> `model_not_allowed` / `ip_not_allowed` reason.
+- None/{} key info (explicit auth-disabled path) or internal `is_master is True`
+  -> unrestricted. Never feed failed authentication lookup results to the evaluator.
+- Corrupt admin reads fail validation rather than masquerade as unrestricted;
+  a valid whole-policy PUT can repair the record. No corruption-repair UI yet.
+
+### 5. Good/Base/Bad Cases
+- Good: explicit disabled dimension with empty list; PUT of complete replacement.
+- Base: historical key has no field; name-only edit leaves it missing.
+- Bad: `Literal[1]` alone accepts `True`/`1.0`; pre-validation rejects these.
+- Bad: normalizing a corrupt document to missing grants unintended access.
+
+### 6. Tests Required
+- `test_access_policy.py`: strict types, byte/count limits, IPv4/IPv6/mapped
+  boundaries, literal IDs, immutable snapshots, secret-safe denial errors.
+- `test_access_policy_storage.py`: real moto table, Decimal roundtrip, atomic
+  replacement, HTTP/direct admin validation, omission, consistent reads,
+  single-flight deep-copy isolation, two-worker expiry and read-failure behavior.
+
+### 7. Wrong vs Correct
+```python
+# Wrong: truthiness conflates corrupt null/{} with a historical key.
+if not key_info.get("access_policy"):
+    return unrestricted
+
+# Correct: only decode after successful auth or its explicit bypass.
+policy = policy_from_key_info(authenticated_key_info)
+require_model(policy, exact_outbound_target)
+```
+
+---
+
 ## Query Patterns
 
 - Key lookups by secondary attribute use an existing GSI when one exists

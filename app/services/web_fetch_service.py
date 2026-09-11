@@ -27,6 +27,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.access_policy import AccessPolicyDenied
+from app.services.model_access import preflight_model, model_denial_event
 from app.schemas.anthropic import (
     MessageRequest,
     MessageResponse,
@@ -855,6 +857,7 @@ class WebFetchService:
         """
         logger.info(f"[WebFetch] Handling request {request_id}")
 
+        preflight_model(bedrock_service, request.model)
         config = self.extract_web_fetch_config(request)
         if not config:
             raise ValueError("No web fetch tool found in request")
@@ -1288,6 +1291,7 @@ class WebFetchService:
         """
         logger.info(f"[WebFetch Streaming] Handling request {request_id}")
 
+        preflight_model(bedrock_service, request.model)
         config = self.extract_web_fetch_config(request)
         if not config:
             yield self._format_sse_event({
@@ -1366,6 +1370,9 @@ class WebFetchService:
                         iter_request,
                         anthropic_beta=filtered_beta,
                     )
+                except AccessPolicyDenied as exc:
+                    yield model_denial_event(exc)
+                    return
                 except Exception as e:
                     logger.error(f"[WebFetch Streaming] Bedrock call failed: {e}")
                     yield self._format_sse_event({

@@ -49,13 +49,15 @@ class FailoverManager:
                 for t in targets
             ]
 
-    def find_failover(self, source_model: str) -> Optional[Tuple[str, str, str, str]]:
+    def find_failover(self, source_model: str, candidate_allowed=None) -> Optional[Tuple[str, str, str, str]]:
         """
         Find first available failover target.
         Returns (decrypted_key, key_id, target_provider, target_model) or None.
         """
         targets = self._chains.get(source_model, [])
         for target in targets:
+            if candidate_allowed is not None and not candidate_allowed(target.provider, target.model):
+                continue
             key_result = self._key_pool.get_available_key(target.provider, target.model)
             if key_result:
                 decrypted_key, key_id = key_result

@@ -76,4 +76,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
 
 # Run application directly from the virtual environment
 # Note: Using python -m uvicorn instead of uv run to avoid rebuild issues
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Auth owns raw-peer attribution; never enable Uvicorn proxy-header rewriting.
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

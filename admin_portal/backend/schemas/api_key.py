@@ -1,10 +1,33 @@
 """API Key schemas."""
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
+
+from app.schemas.access_policy import AccessPolicy
 
 
-class ApiKeyCreate(BaseModel):
+class _ApiKeyPolicyFields(BaseModel):
+    """Omission is allowed; explicit null must never silently remove policy."""
+
+    access_policy: AccessPolicy | None = Field(
+        None, description="Complete v1 policy; omit to preserve existing restrictions"
+    )
+
+    @field_validator("access_policy", mode="before")
+    @classmethod
+    def reject_null_policy(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("access_policy cannot be null; disable dimensions explicitly")
+        return value
+
+
+class ApiKeyCreate(_ApiKeyPolicyFields):
     """Schema for creating a new API key."""
 
     user_id: str = Field(..., description="User identifier")
@@ -20,7 +43,7 @@ class ApiKeyCreate(BaseModel):
     provider_id: Optional[str] = Field(None, description="Provider ID for Bedrock routing")
 
 
-class ApiKeyUpdate(BaseModel):
+class ApiKeyUpdate(_ApiKeyPolicyFields):
     """Schema for updating an API key."""
 
     name: Optional[str] = None
@@ -37,7 +60,7 @@ class ApiKeyUpdate(BaseModel):
     provider_id: Optional[str] = None
 
 
-class ApiKeyResponse(BaseModel):
+class ApiKeyResponse(_ApiKeyPolicyFields):
     """Schema for API key response."""
 
     api_key: str
@@ -62,12 +85,21 @@ class ApiKeyResponse(BaseModel):
     compression_strategy: Optional[str] = "off"
     provider_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    access_policy: AccessPolicy | None = None  # Omitted on the wire for legacy keys
     # Usage stats (aggregated from usage_stats table)
     total_input_tokens: Optional[int] = 0
     total_output_tokens: Optional[int] = 0
     total_cached_tokens: Optional[int] = 0       # Cache read tokens
     total_cache_write_tokens: Optional[int] = 0  # Cache write tokens
     total_requests: Optional[int] = 0
+
+    @model_serializer(mode="wrap")
+    def omit_missing_policy(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Preserve missing-vs-null semantics in responses as well as requests.
+        data: dict[str, Any] = handler(self)
+        if "access_policy" not in self.model_fields_set:
+            data.pop("access_policy", None)
+        return data
 
     @field_validator('created_at', 'updated_at', mode='before')
     @classmethod
