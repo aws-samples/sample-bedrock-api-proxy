@@ -470,8 +470,17 @@ def test_service_stream_restores_names_including_service_tier_retry(service, ret
         if line.startswith("data: ")
     ]
     starts = [event for event in decoded if event["type"] == "content_block_start"]
-    assert starts[0]["content_block"]["name"] == LONG_NAME
-    assert starts[0]["content_block"]["id"] == "toolu_1"
+    assert starts == [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": LONG_NAME,
+            },
+        }
+    ]
     assert len(calls) == (2 if retry else 1)
 
 
