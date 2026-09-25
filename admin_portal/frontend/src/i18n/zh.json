@@ -271,7 +271,11 @@
     "syncCompleted": "定价同步完成",
     "syncSummary": "源价格表 {{sourceModels}} 个模型：新建 {{created}} 个，更新 {{updated}} 个，无变化 {{unchanged}} 个。",
     "syncSkippedManual": "已跳过 {{count}} 个手动管理的条目。",
-    "syncFailed": "定价同步失败"
+    "syncFailed": "定价同步失败",
+    "saveFailed": "保存定价失败",
+    "alreadyExists": "{{modelId}} 的定价已存在（可能已由定价同步添加），请编辑现有条目。",
+    "editExisting": "编辑现有条目",
+    "deleteFailed": "删除定价失败：{{error}}"
   },
   "modelMapping": {
     "title": "模型映射",

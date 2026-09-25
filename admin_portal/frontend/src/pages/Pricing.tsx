@@ -8,6 +8,7 @@ import {
   useDeletePricing,
   useSyncPricing,
 } from '../hooks';
+import { ApiError, pricingApi } from '../services/api';
 import type { ModelPricing, PricingCreate, PricingUpdate, PricingSyncResult } from '../types';
 
 // Slide-over Panel Component
@@ -45,15 +46,20 @@ function PricingForm({
   initialData,
   onSubmit,
   onCancel,
+  onEditExisting,
   isLoading,
 }: {
   initialData?: ModelPricing;
-  onSubmit: (data: PricingCreate | PricingUpdate) => void;
+  onSubmit: (data: PricingCreate | PricingUpdate) => Promise<void>;
   onCancel: () => void;
+  onEditExisting?: (modelId: string) => void;
   isLoading: boolean;
 }) {
   const { t } = useTranslation();
   const isEdit = !!initialData;
+  const [submitError, setSubmitError] = useState<{ message: string; conflict: boolean } | null>(
+    null
+  );
 
   const [formData, setFormData] = useState({
     model_id: initialData?.model_id || '',
@@ -66,9 +72,22 @@ function PricingForm({
     status: initialData?.status || 'active',
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    setSubmitError(null);
+    try {
+      await onSubmit(formData);
+    } catch (err) {
+      const conflict = !isEdit && err instanceof ApiError && err.status === 409;
+      setSubmitError({
+        message: conflict
+          ? t('pricing.alreadyExists', { modelId: formData.model_id })
+          : err instanceof Error
+            ? err.message
+            : String(err),
+        conflict,
+      });
+    }
   };
 
   return (
@@ -261,6 +280,26 @@ function PricingForm({
         </p>
       </div>
 
+      {/* Submit error */}
+      {submitError && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-3 flex items-start gap-3">
+          <span className="material-symbols-outlined text-red-400 mt-0.5">error</span>
+          <div className="text-sm text-slate-300 flex-1">
+            <p className="font-medium text-red-300 mb-1">{t('pricing.saveFailed')}</p>
+            <p className="break-all">{submitError.message}</p>
+            {submitError.conflict && onEditExisting && (
+              <button
+                type="button"
+                onClick={() => onEditExisting(formData.model_id)}
+                className="mt-2 text-primary hover:text-blue-400 font-medium"
+              >
+                {t('pricing.editExisting')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex gap-3 mt-4 pt-4 border-t border-border-dark">
         <button
@@ -328,7 +367,24 @@ export default function Pricing() {
 
   const handleDelete = async (modelId: string) => {
     if (confirm(t('pricing.confirmDelete'))) {
-      await deleteMutation.mutateAsync(modelId);
+      try {
+        await deleteMutation.mutateAsync(modelId);
+      } catch (err) {
+        alert(
+          t('pricing.deleteFailed', { error: err instanceof Error ? err.message : String(err) })
+        );
+      }
+    }
+  };
+
+  // Create hit 409: open the existing row in the edit panel instead.
+  const handleEditExisting = async (modelId: string) => {
+    try {
+      const existing = await pricingApi.get(modelId);
+      setShowCreatePanel(false);
+      setEditingPricing(existing);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -653,6 +709,7 @@ export default function Pricing() {
         <PricingForm
           onSubmit={handleCreate}
           onCancel={() => setShowCreatePanel(false)}
+          onEditExisting={handleEditExisting}
           isLoading={createMutation.isPending}
         />
       </SlideOver>

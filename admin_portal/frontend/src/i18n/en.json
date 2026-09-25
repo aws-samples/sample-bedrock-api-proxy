@@ -271,7 +271,11 @@
     "syncCompleted": "Pricing sync completed",
     "syncSummary": "{{sourceModels}} source models: {{created}} created, {{updated}} updated, {{unchanged}} unchanged.",
     "syncSkippedManual": "{{count}} manually managed rows were skipped.",
-    "syncFailed": "Pricing sync failed"
+    "syncFailed": "Pricing sync failed",
+    "saveFailed": "Failed to save pricing",
+    "alreadyExists": "Pricing for {{modelId}} already exists (it may have been added by pricing sync). Edit the existing entry instead.",
+    "editExisting": "Edit existing entry",
+    "deleteFailed": "Failed to delete pricing: {{error}}"
   },
   "modelMapping": {
     "title": "Model Mapping",
