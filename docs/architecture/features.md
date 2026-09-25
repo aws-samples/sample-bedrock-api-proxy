@@ -469,7 +469,7 @@ In production (ECS), the admin portal frontend is served as static files from th
 
 ## Model Pricing Sync (LiteLLM)
 
-Pulls model pricing from the [LiteLLM price table](https://github.com/BerriAI/litellm/blob/litellm_internal_staging/model_prices_and_context_window.json) into the `anthropic-proxy-model-pricing` DynamoDB table, replacing manual per-model price entry.
+Pulls model pricing from the [LiteLLM price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) into the `anthropic-proxy-model-pricing` DynamoDB table, replacing manual per-model price entry.
 
 ### How it works
 
@@ -492,7 +492,7 @@ All three return/print a summary: `created`, `updated`, `unchanged`, `skipped_ma
 
 ```bash
 PRICING_SYNC_ENABLED=False            # periodic sync in the admin portal
-PRICING_SYNC_URL=https://raw.githubusercontent.com/BerriAI/litellm/litellm_internal_staging/model_prices_and_context_window.json
+PRICING_SYNC_URL=https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 PRICING_SYNC_INTERVAL_HOURS=24
 PRICING_SYNC_PROVIDERS=bedrock,bedrock_converse,bedrock_mantle
 PRICING_SYNC_CREATE_MISSING=True      # create rows for source models not in the table

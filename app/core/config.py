@@ -616,7 +616,7 @@ class Settings(BaseSettings):
     pricing_sync_url: str = Field(
         default=(
             "https://raw.githubusercontent.com/BerriAI/litellm/"
-            "litellm_internal_staging/model_prices_and_context_window.json"
+            "main/model_prices_and_context_window.json"
         ),
         alias="PRICING_SYNC_URL",
         description="URL of the LiteLLM model_prices_and_context_window.json to sync from"
