@@ -21,7 +21,9 @@ def mock_dynamodb():
     with mock_aws():
         import boto3
 
-        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        # Must match settings.aws_region: DynamoDBClient builds its resource from
+        # that, so a hardcoded region makes every table lookup here a 404.
+        dynamodb = boto3.resource("dynamodb", region_name=settings.aws_region)
         dynamodb.create_table(
             TableName=settings.dynamodb_model_mapping_table,
             KeySchema=[{"AttributeName": "anthropic_model_id", "KeyType": "HASH"}],
@@ -138,3 +140,42 @@ async def test_post_over_default_reports_override(api, schemas):
     )
     assert created.source == "override"
     assert created.default_bedrock_model_id == DEFAULT_TARGET
+
+
+async def test_legacy_iso_timestamp_row_does_not_break_listing(api, mock_dynamodb):
+    """Rows written by ad-hoc tooling carry ISO-8601 timestamps, not epoch ints.
+
+    Prod hit this: one such row made GET /api/model-mapping return 500, taking
+    the whole Model Mapping page down.
+    """
+    table = mock_dynamodb.Table(settings.dynamodb_model_mapping_table)
+    table.put_item(
+        Item={
+            "anthropic_model_id": "legacy-alias",
+            "bedrock_model_id": "openai.gpt-5.4",
+            "updated_at": "2026-07-29T15:57:49.963303+00:00",
+            "created_at": "2026-07-29T15:57:49.963303+00:00",
+        }
+    )
+
+    listing = await api.list_model_mappings(search=None)
+    entry = next(i for i in listing.items if i.anthropic_model_id == "legacy-alias")
+    assert entry.updated_at == 1785340669
+
+    fetched = await api.get_model_mapping("legacy-alias")
+    assert fetched.updated_at == 1785340669
+
+
+async def test_unparseable_timestamp_reported_as_unset(api, mock_dynamodb):
+    table = mock_dynamodb.Table(settings.dynamodb_model_mapping_table)
+    table.put_item(
+        Item={
+            "anthropic_model_id": "junk-ts-alias",
+            "bedrock_model_id": "zai.glm-5",
+            "updated_at": "not-a-timestamp",
+        }
+    )
+
+    listing = await api.list_model_mappings(search=None)
+    entry = next(i for i in listing.items if i.anthropic_model_id == "junk-ts-alias")
+    assert entry.updated_at is None
