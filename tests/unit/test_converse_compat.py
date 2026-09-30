@@ -576,6 +576,38 @@ def test_native_restored_history_skips_only_empty_system_messages(service, conte
     assert request.model_dump() == original
 
 
+def test_native_assistant_type_debug_log_is_one_line_per_request(service, caplog):
+    request = MessageRequest(
+        model="claude-fable-5-1",
+        max_tokens=128,
+        messages=[
+            {"role": "user", "content": "Hi."},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hello."}]},
+            {"role": "user", "content": "Continue."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": None},
+                    {"type": "text", "text": "Done."},
+                ],
+            },
+            {"role": "user", "content": "Thanks."},
+        ],
+    )
+
+    with caplog.at_level("INFO", logger="app.services.bedrock_service"):
+        service._convert_to_anthropic_native_request(request)
+    assert not [r for r in caplog.records if "BEDROCK NATIVE CONVERT" in r.message]
+
+    with caplog.at_level("DEBUG", logger="app.services.bedrock_service"):
+        service._convert_to_anthropic_native_request(request)
+    lines = [r.message for r in caplog.records if "BEDROCK NATIVE CONVERT" in r.message]
+    assert lines == [
+        "[BEDROCK NATIVE CONVERT] 2 assistant messages, 1 rewritten: "
+        "msg[3] ['thinking', 'text'] -> ['text']"
+    ]
+
+
 @pytest.mark.parametrize("signature", [None, ""])
 def test_native_drops_unsigned_empty_thinking_but_preserves_fable_signature(
     service, signature

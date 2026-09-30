@@ -469,6 +469,12 @@ class BedrockService:
             "messages": [],
         }
 
+        # Debug: summarize assistant content types (thinking block ordering) in
+        # one line per request instead of two lines per history message.
+        debug_assistant_types = logger.isEnabledFor(logging.DEBUG)
+        assistant_msg_count = 0
+        rewritten_assistant_types: list[str] = []
+
         # Convert messages
         for msg_idx, msg in enumerate(request.messages):
             message_dict: Dict[str, Any] = {"role": msg.role}
@@ -477,9 +483,9 @@ class BedrockService:
             if isinstance(msg.content, str):
                 message_dict["content"] = msg.content
             else:
-                # Debug: Log content types BEFORE conversion to see Pydantic's order
-                if msg.role == "assistant":
-                    pre_convert_types = []
+                # Debug: capture content types BEFORE conversion to see Pydantic's order
+                pre_convert_types: list[str] = []
+                if debug_assistant_types and msg.role == "assistant":
                     for b in msg.content:
                         if hasattr(b, "type"):
                             pre_convert_types.append(b.type)
@@ -487,7 +493,6 @@ class BedrockService:
                             pre_convert_types.append(b.get("type", "?"))
                         else:
                             pre_convert_types.append(type(b).__name__)
-                    print(f"[BEDROCK NATIVE CONVERT] msg[{msg_idx}] assistant BEFORE convert: {pre_convert_types}")
 
                 # Convert content blocks to native format
                 content_list = []
@@ -565,10 +570,14 @@ class BedrockService:
                     content_list.append(block_dict)
                 message_dict["content"] = content_list
 
-                # Debug: Log content types for assistant messages to debug thinking block ordering
-                if msg.role == "assistant":
+                # Debug: record assistant messages whose block types changed in conversion
+                if debug_assistant_types and msg.role == "assistant":
+                    assistant_msg_count += 1
                     content_types = [b.get("type", "?") for b in content_list]
-                    print(f"[BEDROCK NATIVE CONVERT] msg[{msg_idx}] assistant content_types: {content_types}")
+                    if content_types != pre_convert_types:
+                        rewritten_assistant_types.append(
+                            f"msg[{msg_idx}] {pre_convert_types} -> {content_types}"
+                        )
 
             if msg.role == "system":
                 content = message_dict["content"]
@@ -584,6 +593,14 @@ class BedrockService:
             if msg.role == "assistant" and not message_dict["content"]:
                 continue
             native_request["messages"].append(message_dict)
+
+        if assistant_msg_count:
+            logger.debug(
+                "[BEDROCK NATIVE CONVERT] %d assistant messages, %d rewritten%s",
+                assistant_msg_count,
+                len(rewritten_assistant_types),
+                ": " + "; ".join(rewritten_assistant_types) if rewritten_assistant_types else "",
+            )
 
         # Add system message
         if request.system:
