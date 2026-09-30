@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"DynamoDB schemas, consistency and manager conventions"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Scoped verification and baseline handling"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Shared policy contracts across API, services, storage and UI"}
+{"file":".trellis/tasks/09-11-per-key-access-policies/design.md","reason":"Approved exact-model, trusted-IP and stateful authorization contracts"}

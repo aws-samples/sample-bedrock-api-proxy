@@ -56,9 +56,11 @@ class RuleEngine:
         ]
         self.load_rules(rules)
 
-    def match(self, user_message: str, request_model: str) -> Optional[RuleMatch]:
-        """Return first matching rule or None."""
+    def match(self, user_message: str, request_model: str, candidate_allowed=None) -> Optional[RuleMatch]:
+        """Return first matching permitted rule or None."""
         for rule in self._rules:
+            if candidate_allowed is not None and not candidate_allowed(rule.target_provider or "bedrock", rule.target_model):
+                continue
             try:
                 if rule.rule_type == "keyword":
                     keywords = [k.strip().lower() for k in rule.pattern.split(",") if k.strip()]

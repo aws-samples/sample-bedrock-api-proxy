@@ -15,6 +15,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.access_policy import AccessPolicyDenied
+from app.services.model_access import preflight_model, saved_model_fields, model_denial_event
 from app.schemas.anthropic import MessageRequest, MessageResponse
 from app.schemas.ptc import (
     PTC_BETA_HEADER,
@@ -810,6 +812,7 @@ Before writing code, verify:
         Returns:
             Tuple of (response, container_info)
         """
+        preflight_model(bedrock_service, request.model)
         # Start PTC tracing span
         _ptc_span = None
         if settings.enable_tracing:
@@ -1044,6 +1047,7 @@ Before writing code, verify:
                         # Preserve original request context for finalization
                         original_system=original_request.system,
                         original_model=original_request.model,
+                        **saved_model_fields(bedrock_service, original_request.model),
                         original_max_tokens=original_request.max_tokens,
                         original_temperature=original_request.temperature,
                         original_top_p=original_request.top_p,
@@ -1093,6 +1097,7 @@ Before writing code, verify:
                         # Preserve original request context for finalization
                         original_system=original_request.system,
                         original_model=original_request.model,
+                        **saved_model_fields(bedrock_service, original_request.model),
                         original_max_tokens=original_request.max_tokens,
                         original_temperature=original_request.temperature,
                         original_top_p=original_request.top_p,
@@ -1252,6 +1257,7 @@ Before writing code, verify:
         if not state:
             raise ValueError(f"No pending execution for session {session_id}")
 
+        preflight_model(bedrock_service, original_request.model, state)
         logger.info(f"[PTC] Resuming execution for session {session_id}, tool={state.pending_tool_name}")
 
         # Debug: Log incoming messages during continuation to see what the client echoed back
@@ -2413,6 +2419,7 @@ Before writing code, verify:
         Yields:
             SSE-formatted event strings
         """
+        preflight_model(bedrock_service, request.model)
         logger.info(f"[PTC Streaming] Handling request {request_id}")
 
         # Check Docker availability
@@ -2562,6 +2569,7 @@ Before writing code, verify:
                             pending_batch_call_ids=pending_call_ids,
                             original_system=bedrock_request.system,
                             original_model=bedrock_request.model,
+                            **saved_model_fields(bedrock_service, bedrock_request.model),
                             original_max_tokens=bedrock_request.max_tokens,
                             original_temperature=bedrock_request.temperature,
                             original_top_p=bedrock_request.top_p,
@@ -2607,6 +2615,7 @@ Before writing code, verify:
                             pending_tool_input=result.arguments,
                             original_system=bedrock_request.system,
                             original_model=bedrock_request.model,
+                            **saved_model_fields(bedrock_service, bedrock_request.model),
                             original_max_tokens=bedrock_request.max_tokens,
                             original_temperature=bedrock_request.temperature,
                             original_top_p=bedrock_request.top_p,
@@ -2673,6 +2682,9 @@ Before writing code, verify:
                 })
                 return
 
+        except AccessPolicyDenied as exc:
+            yield model_denial_event(exc)
+            return
         except Exception as e:
             logger.error(f"[PTC Streaming] Error: {e}")
             yield self._format_sse_event({
@@ -2707,6 +2719,7 @@ Before writing code, verify:
             })
             return
 
+        preflight_model(bedrock_service, original_request.model, state)
         logger.info(f"[PTC Streaming] Resuming execution for session {session_id}")
 
         message_id = f"msg_{uuid4().hex[:24]}"
@@ -2831,6 +2844,9 @@ Before writing code, verify:
                 })
                 return
 
+        except AccessPolicyDenied as exc:
+            yield model_denial_event(exc)
+            return
         except Exception as e:
             logger.error(f"[PTC Streaming] Error in continuation: {e}")
             yield self._format_sse_event({
@@ -3144,6 +3160,8 @@ Before writing code, verify:
                             pending_batch_call_ids=pending_call_ids,
                             original_system=execution_state.original_system,
                             original_model=execution_state.original_model,
+                            original_target=execution_state.original_target,
+                            original_api=execution_state.original_api,
                             original_max_tokens=execution_state.original_max_tokens,
                             original_temperature=execution_state.original_temperature,
                             original_top_p=execution_state.original_top_p,
@@ -3189,6 +3207,8 @@ Before writing code, verify:
                             pending_tool_input=new_result.arguments,
                             original_system=execution_state.original_system,
                             original_model=execution_state.original_model,
+                            original_target=execution_state.original_target,
+                            original_api=execution_state.original_api,
                             original_max_tokens=execution_state.original_max_tokens,
                             original_temperature=execution_state.original_temperature,
                             original_top_p=execution_state.original_top_p,
@@ -3243,6 +3263,8 @@ Before writing code, verify:
                             pending_tool_input={},
                             original_system=execution_state.original_system,
                             original_model=execution_state.original_model,
+                            original_target=execution_state.original_target,
+                            original_api=execution_state.original_api,
                             original_max_tokens=execution_state.original_max_tokens,
                             original_temperature=execution_state.original_temperature,
                             original_top_p=execution_state.original_top_p,

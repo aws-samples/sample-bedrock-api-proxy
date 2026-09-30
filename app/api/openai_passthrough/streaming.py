@@ -29,6 +29,10 @@ from typing import Any
 import httpx
 
 from app.api.openai_passthrough.client import get_client, upstream_headers, upstream_url
+from app.api.openai_passthrough.response_access import (
+    ResponseAccessError,
+    registered_sse_lines,
+)
 from app.api.openai_passthrough.usage_extractor import try_extract_usage_from_sse
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,8 @@ async def open_upstream_stream(
     base_url: str | None = None,
     api_key: str | None = None,
     extensions: dict[str, Any] | None = None,
+    resolved_url: str | None = None,
+    params: str | None = None,
 ) -> tuple[httpx.Response, bytes | None]:
     """Open an upstream streaming request and peek at the status code.
 
@@ -104,7 +110,8 @@ async def open_upstream_stream(
     headers = upstream_headers(extra_headers, api_key=api_key)
     req = client.build_request(
         method,
-        upstream_url(
+        resolved_url
+        or upstream_url(
             path,
             base_url=base_url,
             model=body.get("model") if isinstance(body, dict) else None,
@@ -112,6 +119,7 @@ async def open_upstream_stream(
         json=body,
         headers=headers,
         extensions=extensions,
+        params=params,
     )
     try:
         resp = await client.send(req, stream=True)
@@ -141,10 +149,26 @@ async def open_upstream_stream(
     return resp, None
 
 
+async def stream_retrieved_response(resp: httpx.Response) -> AsyncIterator[bytes]:
+    """Relay an authorized retrieval incrementally, without billing create twice."""
+    try:
+        async for chunk in resp.aiter_bytes():
+            yield chunk
+    except httpx.RequestError:
+        # Headers may already be sent. Never synthesize a successful terminal.
+        error = {
+            "error": {"message": "upstream retrieval failed", "type": "upstream_error"}
+        }
+        yield ("\nevent: error\ndata: " + json.dumps(error) + "\n\n").encode()
+    finally:
+        await resp.aclose()
+
+
 async def stream_passthrough_response(
     resp: httpx.Response,
     api_surface: str,
     on_complete: Callable[[dict[str, Any]], Awaitable[None] | None],
+    on_response_id: Callable[[str], Awaitable[None]] | None = None,
 ) -> AsyncIterator[bytes]:
     """Stream the body of an already-opened 2xx upstream response.
 
@@ -155,7 +179,11 @@ async def stream_passthrough_response(
     has_event_line = False
 
     try:
-        async for raw_line in resp.aiter_lines():
+        async for raw_line in registered_sse_lines(
+            resp,
+            on_response_id,
+            lambda line: try_extract_usage_from_sse(line, usage, api_surface),
+        ):
             if logger.isEnabledFor(logging.INFO):
                 logger.info(
                     "[OPENAI-PASSTHROUGH] upstream stream chunk %s",
@@ -182,7 +210,9 @@ async def stream_passthrough_response(
             # Upstream gives us SSE lines without trailing newlines; restore the
             # framing byte so the SSE body is well-formed for the downstream client.
             yield (raw_line + "\n").encode("utf-8")
-            try_extract_usage_from_sse(raw_line, usage, api_surface)
+    except ResponseAccessError as exc:
+        yield ("\nevent: error\ndata: " + json.dumps(exc.body()) + "\n\n").encode()
+        return
     except (httpx.RequestError, httpx.TimeoutException) as exc:
         # Upstream connection/timeout failure during streaming. OpenAI SDK clients
         # expect a clean SSE termination, not an abruptly closed stream.
@@ -202,12 +232,11 @@ async def stream_passthrough_response(
         raise
     finally:
         await resp.aclose()
-
-    if usage:
-        result = on_complete(usage)
-        # Support both sync and async callbacks
-        if hasattr(result, "__await__"):
-            await result  # type: ignore[misc]
+        if usage:
+            result = on_complete(usage)
+            # Support both sync and async callbacks, including interrupted streams.
+            if hasattr(result, "__await__"):
+                await result  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

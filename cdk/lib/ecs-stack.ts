@@ -83,6 +83,11 @@ export class ECSStack extends cdk.Stack {
       idleTimeout: cdk.Duration.seconds(1800),
     });
 
+    // Source-IP authorization relies on right-anchored append-only XFF.
+    // Keep ports disabled: the application accepts IP literals, not host:port.
+    this.alb.setAttribute('routing.http.xff_header_processing.mode', 'append');
+    this.alb.setAttribute('routing.http.xff_client_port.enabled', 'false');
+
     // Create Target Group - target type depends on launch type
     const targetType = config.launchType === 'ec2'
       ? elbv2.TargetType.INSTANCE
@@ -256,6 +261,12 @@ export class ECSStack extends cdk.Stack {
       // Authentication
       API_KEY_HEADER: 'x-api-key',
       REQUIRE_API_KEY: config.requireApiKey.toString(),
+      // Only ALB public-subnet peers reach tasks (NetworkStack ALB-only SG).
+      // Two hops additionally requires the secret-protected listener below;
+      // never mix a direct ALB forwarding rule into CloudFront mode.
+      CLIENT_IP_TRUSTED_PROXY_CIDRS: vpc.publicSubnets
+        .map(subnet => subnet.ipv4CidrBlock).join(','),
+      CLIENT_IP_TRUSTED_PROXY_HOPS: config.enableCloudFront ? '2' : '1',
 
       // Rate Limiting
       RATE_LIMIT_ENABLED: config.rateLimitEnabled.toString(),

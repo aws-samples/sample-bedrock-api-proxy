@@ -211,8 +211,156 @@ uv run scripts/setup_tables.py
 uv run scripts/create_api_key.py --user-id dev-user --name "Dev Key"
 
 # Run
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 ```
+
+### Source-IP policy deployment checklist
+
+Per-key IP restrictions are checked on every authenticated request, including cache
+hits, before rate limiting or handlers. Historical keys without a policy remain
+unrestricted; master keys and `REQUIRE_API_KEY=False` bypass policy enforcement.
+An IP denial or malformed stored policy returns 403 in the Anthropic/OpenAI error
+envelope. Invalid keys still return 401. Public health/docs paths stay public.
+
+**Launch invariant:** the application must receive the **raw transport peer** in
+ASGI `scope['client']`. Docker and the Python entry points disable Uvicorn proxy
+rewriting. For manual Uvicorn launches always pass `--no-proxy-headers`; for a custom
+ASGI host disable equivalent rewriting and any outer proxy-header middleware.
+`--forwarded-allow-ips='*'` is not a substitute. A previously rewritten peer cannot
+be recovered or reliably detected by the application; parsing XFF again could
+otherwise authorize a forged address.
+
+| Ingress topology | Settings | Required protection |
+|---|---|---|
+| Direct / local Docker | `CLIENT_IP_TRUSTED_PROXY_CIDRS=` and `CLIENT_IP_TRUSTED_PROXY_HOPS=0` | No peer rewriting; all forwarded headers ignored |
+| ALB → proxy | Actual ALB subnet CIDRs (comma-separated), hops `1` | Proxy port reachable only from ALB security group; ALB XFF `append`, client ports disabled |
+| CloudFront → ALB → proxy | Same ALB subnet CIDRs, hops `2` | Above, plus distribution-specific secret validated by **every** forwarding listener rule; default rejects direct ALB traffic |
+
+CDK injects public ALB subnet CIDRs and the appropriate hop count for both Fargate
+and EC2, explicitly sets XFF append/port attributes, and retains the existing
+ALB-only task/host security group and CloudFront secret rules. Do not widen task
+ingress, add an unprotected ALB listener, or mix one-hop and two-hop ingress on a
+single proxy deployment. CIDR membership alone does **not** authenticate a proxy.
+Other proxies require an operator-verified fixed, appended/sanitized topology.
+
+Configuration fails startup for invalid/host-bit CIDRs, trust-all ranges (including
+unions covering a whole address family), inconsistent CIDRs/hops, or hops outside
+0–8. Maximum: 100 trusted CIDRs and 8 KiB configuration. Proxy mode accepts one
+XFF header, at most 8 KiB and 64 address tokens. Duplicate headers, malformed tokens
+(even in the prefix), ports, scoped addresses, short/missing chains, or untrusted
+peers make source attribution indeterminate and deny an IP-restricted key. Bare
+IPv4/IPv6 are supported; IPv4-mapped IPv6 normalizes to IPv4. Repeated valid address
+tokens are allowed (e.g. shared NAT). No arbitrary XFF-first selection is used.
+
+The application never changes `request.client`. Handlers can use
+`request.state.client_ip` (canonical string or `None`) and `client_ip_reason` for
+attribution; `request.state.access_policy` is the immutable admitted snapshot.
+Trusted ingress may set a single `X-Forwarded-Proto: http` or `https`; only the
+scheme is honored so slash redirects retain their upstream scheme. Untrusted,
+duplicate or malformed proto headers are ignored. The current CloudFront origin
+uses HTTP to ALB, so ALB may report `http`, not the viewer's HTTPS scheme; use
+canonical API paths (no trailing-slash redirect), and smoke-test redirects rather
+than treating a viewer-supplied scheme header as trusted.
+
+Before activating a non-master canary key:
+
+1. Finish deploying enforcement-capable code to **all workers** before enabling
+   restrictions in the admin portal. Never activate policies on a mixed-version
+   or partially enforcing deployment.
+2. Verify real ingress peers, append mode, disabled XFF ports, task/host SGs, and
+   CloudFront secret rejection of direct ALB requests. Include EC2 bridge-network
+   source preservation if using that launch type. Never broaden trust to fix an
+   unexplained peer address.
+3. Test both API surfaces from known allowed and denied NAT/VPN exits, with no XFF,
+   forged allowlisted XFF prefixes, duplicate/malformed XFF, and IPv6 where enabled.
+   Confirm denied requests produce no upstream/tool effects. The observed address
+   is the external exit address, **not** a workstation behind NAT/VPN.
+4. Repeat with the same cached key from a different exit. Policy changes converge
+   within `API_KEY_CACHE_TTL_SECONDS` (default 60) under healthy consistent reads;
+   lookup failures do not reuse expired permissions. Already admitted requests and
+   streams keep their snapshots and are not forcibly cancelled.
+5. Check redirect schemes and canonical URLs through the actual ingress. Local
+   tests/synthesis are not proof of production topology. No production smoke test
+   is implied by these instructions.
+
+Rollback to a binary that ignores policies is **unsafe**. Use an enforcing version,
+or revoke affected keys and wait out the validation-cache window before rollback;
+drain workers deliberately. Denial logs contain a server-generated request ID,
+reason and canonical source address, never credentials or full forwarding headers.
+
+### Per-key IP and model restrictions
+
+In **Admin → API Keys → Create / Edit**, enable **Restrict source IPs** and/or
+**Restrict actual models** independently. Enter one IPv4/IPv6 address or CIDR per
+line. CIDRs must have no host bits: `203.0.113.0/24` is valid, while
+`203.0.113.8/24` is rejected, never silently broadened. Individual addresses are
+stored as host CIDRs; mapped IPv6 host rules normalize to IPv4.
+
+Choose a mapping to preview its **exact upstream target**, then **Add exact
+target**, or enter literal model IDs/ARNs manually, even when also catalogued as
+aliases. The chooser only suggests the current mapped target: selecting a mapping
+does not change the list; **Add exact target** appends the displayed target ID.
+Manual entries and existing saved permissions are never silently mapped or rewritten.
+
+**Only the exact ID sent upstream at runtime controls access.** For example, the
+legacy OpenAI-compatible adapter may send the original request name `gpt-5.4`.
+In that mode, enter `gpt-5.4` literally, even if the chooser maps it elsewhere. The
+editor warns but permits saving it; this authorizes literal `gpt-5.4`, not its
+mapped target. Verify the actual wire ID for your API mode, routing and failover.
+Two client aliases that actually send the same allowed target can work; remapping
+an alias never expands stored permissions. IDs are case-sensitive; regional/global
+prefixes, versions, bare IDs and ARNs are not interchangeable. Routing, failover,
+tools and continuations must remain within the allowed targets. An ARN permits
+the exact resource, not immutable internals of an externally managed inference profile.
+
+The table shows IP/model restriction badges. Turning a switch off retains its
+list for later reuse; explicitly clear the list if you want it removed. An enabled
+empty list is invalid. Each list is limited to 100 entries (before deduplication),
+model IDs to 2048 characters, and the complete policy to 64 KiB of compact UTF-8
+JSON. Disabled lists are validated too. The editor trims line-edge whitespace;
+server validation is authoritative and validation details appear in the form.
+
+The admin API (`POST /api/keys`, `PUT /api/keys/{api_key}`) accepts this
+complete replacement document alongside other key fields:
+
+```json
+{
+  "access_policy": {
+    "version": 1,
+    "ip": {"enabled": true, "allow": ["203.0.113.8/32", "2001:db8::/48"]},
+    "model": {"enabled": true, "allow": ["global.anthropic.claude-sonnet-4-5-20250929-v1:0"]}
+  }
+}
+```
+
+Omitting `access_policy` on update preserves it; historical keys with no field
+remain unrestricted. `null`, partial documents, unknown versions and enabled-empty
+lists are rejected (422). To disable explicitly, send the complete v1 object with
+the relevant `enabled: false` and the lists to retain. Unrelated form edits omit
+the policy. Runtime corrupt policy data fails closed. Master keys and disabled
+API authentication bypass these restrictions; public health/docs remain public.
+
+**Activation:** changes converge within `API_KEY_CACHE_TTL_SECONDS` (default
+**60 seconds**) under healthy consistent reads. Already admitted requests/streams
+keep their snapshot and are **not forcibly cancelled**. This is separate from
+prompt-cache TTL. Follow the [source-IP deployment checklist](#source-ip-policy-deployment-checklist)
+for raw-peer preservation, NAT/VPN exit addresses, verified proxy trust, staged
+rollout and safe rollback. Local tests do not verify your production ingress.
+
+**Responses retention:** model-restricted keys need verifiable owner, historical
+model and backend metadata for response-ID operations and `previous_response_id`.
+New Responses record attribution in the existing response-context table, without
+storing ordinary message content for authorization. Retention uses
+`RESPONSE_CONTEXT_TTL_SECONDS` (default **3600 seconds / 1 hour**), not the
+upstream's retention. Missing, pre-upgrade, foreign, expired or unverifiable IDs
+return generic **404**, without probing upstream; an owned forbidden model returns
+**403**. Metadata read failures fail closed (503). A changed provider/backend can
+invalidate old IDs. Start a new request when an old ID is no longer verifiable;
+allowing a new model does not authorize the historical model automatically.
+Verified proxy-managed IDs do not gain upstream CRUD support (unsupported
+operations return 400). Unrestricted/master response-ID behavior is unchanged:
+this is not universal tenant isolation for unrestricted Responses. Restricting a
+previously unrestricted key may therefore require starting new conversations.
 
 ## API Usage
 

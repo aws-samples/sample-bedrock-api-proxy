@@ -2,7 +2,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
@@ -29,31 +29,56 @@ def get_manager():
     return ModelPricingManager(db_client)
 
 
+def _list_every_pricing_item(
+    pricing_manager: ModelPricingManager,
+    provider: str | None = None,
+    status_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return every pricing row, following DynamoDB pagination.
+
+    A single scan/query page stops at its Limit (or 1 MB), so filtering one
+    page in memory silently hides rows once the table grows (e.g. after a
+    LiteLLM sync adds hundreds of models).
+    """
+    items: list[dict[str, Any]] = []
+    last_key: dict[str, Any] | None = None
+    while True:
+        result = pricing_manager.list_all_pricing(
+            limit=1000,
+            last_key=last_key,
+            provider_filter=provider,
+            status_filter=status_filter,
+        )
+        items.extend(result.get("items", []))
+        last_key = result.get("last_key")
+        if not last_key:
+            return items
+
+
 @router.get("", response_model=PricingListResponse)
 async def list_pricing(
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int | None = Query(default=None, ge=1, le=1000),
     provider: Optional[str] = Query(default=None),
     status_filter: Optional[str] = Query(default=None, alias="status"),
     search: Optional[str] = Query(default=None),
 ):
     """
-    List all model pricing with pagination and filtering.
+    List model pricing with filtering, sorted by model ID.
+
+    Filters apply to the whole table (all DynamoDB pages), not just the
+    first page.
 
     Args:
-        limit: Maximum number of items to return (1-100)
+        limit: Maximum number of items to return (default: all matches)
         provider: Filter by provider name
         status_filter: Filter by status ('active', 'deprecated', 'disabled')
-        search: Search term for filtering by model ID
+        search: Search term for filtering by model ID or display name
     """
     pricing_manager = get_manager()
 
-    result = pricing_manager.list_all_pricing(
-        limit=limit,
-        provider_filter=provider,
-        status_filter=status_filter,
+    items = _list_every_pricing_item(
+        pricing_manager, provider=provider, status_filter=status_filter
     )
-
-    items = result.get("items", [])
 
     # Apply search filter if provided
     if search:
@@ -64,10 +89,14 @@ async def list_pricing(
             or search_lower in (item.get("display_name") or "").lower()
         ]
 
+    items.sort(key=lambda item: item.get("model_id", ""))
+    if limit is not None:
+        items = items[:limit]
+
     return PricingListResponse(
         items=[PricingResponse(**item) for item in items],
         count=len(items),
-        last_key=result.get("last_key"),
+        last_key=None,
     )
 
 
@@ -78,8 +107,7 @@ async def list_providers():
     """
     pricing_manager = get_manager()
 
-    result = pricing_manager.list_all_pricing(limit=1000)
-    items = result.get("items", [])
+    items = _list_every_pricing_item(pricing_manager)
 
     providers = list(set(item.get("provider", "Unknown") for item in items))
     providers.sort()

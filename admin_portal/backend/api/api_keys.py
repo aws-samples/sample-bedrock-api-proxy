@@ -151,6 +151,7 @@ async def create_api_key(request: ApiKeyCreate):
         service_tier=request.service_tier,
         cache_ttl=request.cache_ttl,
         provider_id=request.provider_id,
+        **request.model_dump(include={"access_policy"}, exclude_unset=True),
     )
 
     # Get the created key details
@@ -178,7 +179,12 @@ async def update_api_key(api_key: str, request: ApiKeyUpdate):
         )
 
     # Update the key
-    update_data = request.model_dump(exclude_none=True)
+    update_data = request.model_dump(exclude_none=True, exclude={"access_policy"})
+    # Policy omission preserves the old document; unlike other optional fields,
+    # explicit null is invalid and is rejected by the shared request schema.
+    update_data.update(
+        request.model_dump(include={"access_policy"}, exclude_unset=True)
+    )
     if update_data:
         success = api_key_manager.update_api_key(api_key, **update_data)
         if not success:

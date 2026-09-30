@@ -8,8 +8,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.client_ip import ClientIPTrust
 
 
 # Offline snapshot of the default model mapping: the ``model-mappings`` git
@@ -172,6 +174,34 @@ class Settings(BaseSettings):
             "this long to apply on running workers."
         )
     )
+
+    # Source attribution: raw ASGI peer, never Uvicorn proxy-header rewriting.
+    client_ip_trusted_proxy_cidrs: str = Field(
+        default="",
+        alias="CLIENT_IP_TRUSTED_PROXY_CIDRS",
+        description="Comma-separated ingress peer/subnet CIDRs; empty for direct mode",
+    )
+    client_ip_trusted_proxy_hops: int = Field(
+        default=0,
+        alias="CLIENT_IP_TRUSTED_PROXY_HOPS",
+        description="Fixed appended hops: 0 direct, 1 ALB, 2 enforced CloudFront+ALB",
+    )
+
+    @field_validator("client_ip_trusted_proxy_hops", mode="before")
+    @classmethod
+    def strict_proxy_hops(cls, value: Any) -> int:
+        if isinstance(value, str) and value.isascii() and value.isdecimal():
+            value = int(value)
+        if type(value) is not int:
+            raise ValueError("Proxy hop count must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def validate_client_ip_trust(self) -> "Settings":
+        ClientIPTrust.from_config(
+            self.client_ip_trusted_proxy_cidrs, self.client_ip_trusted_proxy_hops
+        )
+        return self
 
     # Rate Limiting Settings
     rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
@@ -586,7 +616,7 @@ class Settings(BaseSettings):
     pricing_sync_url: str = Field(
         default=(
             "https://raw.githubusercontent.com/BerriAI/litellm/"
-            "litellm_internal_staging/model_prices_and_context_window.json"
+            "main/model_prices_and_context_window.json"
         ),
         alias="PRICING_SYNC_URL",
         description="URL of the LiteLLM model_prices_and_context_window.json to sync from"

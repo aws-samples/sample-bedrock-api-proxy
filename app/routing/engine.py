@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from app.core.access_policy import AccessPolicyDenied
 from app.core.exceptions import NoProviderAvailableError
 from app.routing.rules import RuleEngine
 
@@ -31,7 +32,11 @@ class RoutingEngine:
         self._cache_aware = cache_aware_routing
 
     def route(self, request_model: str, user_message: str,
-              api_key_info: dict, is_cache_active: bool = False) -> RoutingDecision:
+              api_key_info: dict, is_cache_active: bool = False,
+              candidate_allowed=None) -> RoutingDecision:
+        if candidate_allowed is not None:
+            return self._route_restricted(request_model, user_message, api_key_info,
+                                          is_cache_active, candidate_allowed)
         strategy = api_key_info.get("routing_strategy", "off") if api_key_info else "off"
 
         if strategy == "off":
@@ -66,6 +71,66 @@ class RoutingEngine:
             return self._route_by_smart(user_message)
 
         return RoutingDecision("bedrock", request_model, "fallback")
+
+    def _route_restricted(self, model, message, key_info, cache_active, allowed) -> RoutingDecision:
+        """Filter before scoring, availability checks or any auxiliary inference."""
+        strategy = key_info.get("routing_strategy", "off") if key_info else "off"
+        if strategy == "off" or (self._cache_aware and cache_active):
+            if not allowed("bedrock", model):
+                raise AccessPolicyDenied("model_not_allowed")
+            return RoutingDecision("bedrock", model, "restricted:affinity")
+        match = self._rules.match(message, model, candidate_allowed=allowed)
+        if match:
+            return RoutingDecision(match.target_provider or "bedrock", match.target_model,
+                                   f"rule:{match.rule_name}")
+        if self._should_degrade(key_info):
+            weak = self._smart.weak_model if self._smart else model
+            if allowed("bedrock", weak):
+                return RoutingDecision("bedrock", weak, "budget_degradation")
+        if strategy in ("cost", "quality"):
+            if not self._pricing:
+                raise NoProviderAvailableError("No pricing data for routing")
+            candidates = []
+            permitted_unavailable = False
+            for item in self._pricing.list_all_pricing().get("items", []):
+                target = item.get("model_id", "")
+                if item.get("status") == "deprecated":
+                    continue
+                # Pricing's provider is a vendor label (e.g. "Anthropic"), not
+                # the executable adapter. Only registered supporting adapters
+                # can supply the routing decision's provider identity.
+                providers = (
+                    self._registry.get_providers_for_model(target)
+                    if self._registry
+                    else []
+                )
+                if not providers:
+                    # Bedrock is the default adapter. Distinguish a permitted
+                    # target with no available adapter from a policy denial.
+                    permitted_unavailable |= allowed("bedrock", target)
+                cost = 1000 * float(item.get("input_price", 0)) + 500 * float(item.get("output_price", 0))
+                for provider in providers:
+                    if allowed(provider.name, target):
+                        candidates.append((cost, target, provider.name))
+            if candidates:
+                _, target, provider = sorted(candidates, reverse=strategy == "quality")[0]
+                return RoutingDecision(provider, target, f"restricted:{strategy}")
+            if permitted_unavailable:
+                raise NoProviderAvailableError()
+            raise AccessPolicyDenied("model_not_allowed")
+        if strategy == "auto":
+            # RouteLLM.classify calls Controller.completion, including auxiliary
+            # embedding/inference outside our adapters. Do NOT invoke it for a
+            # restricted key. Use its existing high-complexity fallback locally.
+            models = ([self._smart.strong_model, self._smart.weak_model] if self._smart
+                      else ["claude-sonnet-4-5-20250929"])
+            for target in models:
+                if allowed("bedrock", target):
+                    return RoutingDecision("bedrock", target, "smart:restricted_local")
+            raise AccessPolicyDenied("model_not_allowed")
+        if allowed("bedrock", model):
+            return RoutingDecision("bedrock", model, "fallback")
+        raise AccessPolicyDenied("model_not_allowed")
 
     def _should_degrade(self, api_key_info: dict) -> bool:
         budget = float(api_key_info.get("monthly_budget", 0) or 0)

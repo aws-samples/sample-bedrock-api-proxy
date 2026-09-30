@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.access_policy import UNRESTRICTED_POLICY, AccessPolicyDenied
 from app.core.config import settings
 from app.services.bedrock_service import BedrockService
 
@@ -41,6 +42,26 @@ async def list_models(
     Raises:
         HTTPException: If failed to retrieve models
     """
+    policy = getattr(request.state, "access_policy", UNRESTRICTED_POLICY)
+
+    def visible(models):
+        if not policy.model_enabled:
+            return models
+        result = []
+        for model in models:
+            service = bedrock_service
+            registry = getattr(request.app.state, "provider_registry", None)
+            if settings.multi_provider_enabled and registry:
+                provider = registry.get_provider(model.get("provider", "bedrock"))
+                if provider is not None:
+                    service = provider._service
+            try:
+                service.prepare_model(model["id"], policy)
+            except AccessPolicyDenied:
+                continue
+            result.append(model)
+        return result
+
     try:
         if settings.multi_provider_enabled:
             provider_registry = getattr(request.app.state, "provider_registry", None)
@@ -48,7 +69,7 @@ async def list_models(
                 models = provider_registry.list_all_models()
                 return {
                     "object": "list",
-                    "data": models,
+                    "data": visible(models),
                     "has_more": False,
                 }
 
@@ -56,7 +77,7 @@ async def list_models(
 
         return {
             "object": "list",
-            "data": models,
+            "data": visible(models),
             "has_more": False,
         }
 
@@ -78,6 +99,7 @@ async def list_models(
 )
 async def get_model(
     model_id: str,
+    request: Request,
     bedrock_service: BedrockService = Depends(get_bedrock_service),
 ):
     """
@@ -94,7 +116,9 @@ async def get_model(
         HTTPException: If model not found or error retrieving info
     """
     try:
-        model_info = bedrock_service.get_model_info(model_id)
+        policy = getattr(request.state, "access_policy", UNRESTRICTED_POLICY)
+        target = bedrock_service.prepare_model(model_id, policy).target if policy.model_enabled else model_id
+        model_info = bedrock_service.get_model_info(target)
 
         if not model_info:
             raise HTTPException(
@@ -110,6 +134,8 @@ async def get_model(
             **model_info,
         }
 
+    except AccessPolicyDenied as exc:
+        raise HTTPException(403, detail={"type": "permission_error", "message": str(exc)}) from None
     except HTTPException:
         raise
 

@@ -17,9 +17,11 @@ from uuid import uuid4
 
 import boto3
 from botocore.exceptions import ClientError
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.ttl_cache import TTLCache
+from app.schemas.access_policy import AccessPolicy, parse_stored_access_policy
 from app.services.inference_profile_resolver import get_inference_profile_resolver
 
 logger = logging.getLogger(__name__)
@@ -458,6 +460,10 @@ class DynamoDBClient:
                 raise
 
 
+# Omission preserves legacy/unrestricted keys; explicit None must be rejected.
+_ACCESS_POLICY_UNSET = object()
+
+
 class APIKeyManager:
     """Manager for API key operations."""
 
@@ -481,6 +487,7 @@ class APIKeyManager:
         routing_strategy: Optional[str] = None,
         compression_strategy: Optional[str] = None,
         provider_id: Optional[str] = None,
+        access_policy: object = _ACCESS_POLICY_UNSET,
     ) -> str:
         """
         Create a new API key.
@@ -497,6 +504,8 @@ class APIKeyManager:
             monthly_budget: Monthly budget limit in USD
             tpm_limit: Tokens per minute limit
             cache_ttl: Optional prompt cache TTL duration (e.g., '5m', '1h')
+            access_policy: Complete v1 object; omit for unrestricted legacy behavior.
+                Explicit None or invalid policy raises ValidationError before writing.
 
         Returns:
             Generated API key
@@ -532,8 +541,26 @@ class APIKeyManager:
             "provider_id": provider_id,
         }
 
+        if access_policy is not _ACCESS_POLICY_UNSET:
+            item["access_policy"] = AccessPolicy.model_validate(access_policy).model_dump()
+
         self.table.put_item(Item=item)
         return api_key
+
+    @staticmethod
+    def _normalize_access_policy_item(item: dict[str, Any]) -> dict[str, Any]:
+        """Return valid policies as JSON types; never erase corrupt stored data.
+
+        Runtime policy parsing must still see present null/malformed values and
+        deny them, rather than mistaking a failed parse for legacy omission.
+        """
+        if "access_policy" in item:
+            try:
+                policy = parse_stored_access_policy(item["access_policy"])
+            except ValidationError:
+                return item
+            return {**item, "access_policy": policy.model_dump()}
+        return item
 
     def validate_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
         """
@@ -556,7 +583,9 @@ class APIKeyManager:
                 conflating the two would lock valid keys out during a
                 DynamoDB throttling event.
         """
-        response = self.table.get_item(Key={"api_key": api_key})
+        # Cache misses must observe successful policy writes immediately; the
+        # existing auth-cache TTL is the only policy activation delay.
+        response = self.table.get_item(Key={"api_key": api_key}, ConsistentRead=True)
         item = response.get("Item")
 
         if not item:
@@ -564,7 +593,7 @@ class APIKeyManager:
 
         # If key is active, return it
         if item.get("is_active", False):
-            return item
+            return self._normalize_access_policy_item(item)
 
         # Check if key was deactivated due to budget exceeded
         # and if a new month has started - auto-reactivate it
@@ -577,8 +606,15 @@ class APIKeyManager:
                 # New month has started - reactivate and reset MTD
                 self._reactivate_for_new_month(api_key, current_month)
                 # Fetch updated item
-                response = self.table.get_item(Key={"api_key": api_key})
-                return response.get("Item")
+                response = self.table.get_item(
+                    Key={"api_key": api_key}, ConsistentRead=True
+                )
+                updated_item = response.get("Item")
+                return (
+                    self._normalize_access_policy_item(updated_item)
+                    if updated_item
+                    else None
+                )
 
         return None
 
@@ -692,7 +728,10 @@ class APIKeyManager:
             KeyConditionExpression="user_id = :user_id",
             ExpressionAttributeValues={":user_id": user_id},
         )
-        return response.get("Items", [])
+        return [
+            self._normalize_access_policy_item(item)
+            for item in response.get("Items", [])
+        ]
 
     def list_all_api_keys(
         self,
@@ -726,7 +765,10 @@ class APIKeyManager:
         response = self.table.scan(**scan_kwargs)
 
         return {
-            "items": response.get("Items", []),
+            "items": [
+                self._normalize_access_policy_item(item)
+                for item in response.get("Items", [])
+            ],
             "last_key": response.get("LastEvaluatedKey"),
             "count": response.get("Count", 0),
         }
@@ -742,8 +784,9 @@ class APIKeyManager:
             API key details or None if not found
         """
         try:
-            response = self.table.get_item(Key={"api_key": api_key})
-            return response.get("Item")
+            response = self.table.get_item(Key={"api_key": api_key}, ConsistentRead=True)
+            item = response.get("Item")
+            return self._normalize_access_policy_item(item) if item else None
         except ClientError:
             return None
 
@@ -766,6 +809,7 @@ class APIKeyManager:
         routing_strategy: Optional[str] = None,
         compression_strategy: Optional[str] = None,
         provider_id: Optional[str] = None,
+        access_policy: object = _ACCESS_POLICY_UNSET,
     ) -> bool:
         """
         Update API key fields.
@@ -784,12 +828,14 @@ class APIKeyManager:
             service_tier: New service tier
             is_active: New active status
             deactivated_reason: Reason for deactivation (e.g., "budget_exceeded")
+            access_policy: Complete v1 replacement; omission preserves existing policy.
+                Explicit None or invalid policy raises ValidationError before writing.
 
         Returns:
             True if updated successfully
         """
         update_parts = []
-        expression_values = {}
+        expression_values: dict[str, Any] = {}
         expression_names = {}
 
         if name is not None:
@@ -865,6 +911,13 @@ class APIKeyManager:
         if provider_id is not None:
             update_parts.append("provider_id = :provider_id")
             expression_values[":provider_id"] = provider_id
+
+        if access_policy is not _ACCESS_POLICY_UNSET:
+            # Replace the entire document in the same atomic update as other
+            # fields. Validation errors escape before any write occurs.
+            policy = AccessPolicy.model_validate(access_policy)
+            update_parts.append("access_policy = :access_policy")
+            expression_values[":access_policy"] = policy.model_dump()
 
         if not update_parts:
             return False

@@ -13,17 +13,41 @@ import asyncio
 import copy
 import hashlib
 import hmac
+import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core.access_policy import (
+    UNRESTRICTED_POLICY,
+    AccessPolicyDenied,
+    policy_from_key_info,
+    require_ip,
+)
+from app.core.client_ip import ClientIPTrust
 from app.core.config import settings
 from app.core.ttl_cache import TTLCache
 from app.db.dynamodb import APIKeyManager, DynamoDBClient
+
+logger = logging.getLogger(__name__)
+
+
+def _auth_error(request: Request, status_code: int, message: str) -> JSONResponse:
+    """Protocol adapter only; lower-layer policy denials remain distinct."""
+    error_type = "permission_error" if status_code == 403 else "authentication_error"
+    error = {"type": error_type, "message": message}
+    if request.url.path.startswith("/openai/"):
+        content: dict[str, object] = {"error": error}
+    else:
+        content = {"type": "error", "error": error}
+    return JSONResponse(status_code=status_code, content=content)
+
 
 # Invalid keys are cached only briefly: long enough to blunt brute-force
 # spam against DynamoDB, short enough that a freshly created key works
@@ -78,6 +102,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         """
         super().__init__(app)
         self.api_key_manager = APIKeyManager(dynamodb_client)
+        self._client_ip_trust = ClientIPTrust.from_config(
+            settings.client_ip_trusted_proxy_cidrs,
+            settings.client_ip_trusted_proxy_hops,
+        )
         if cache_ttl_seconds is None:
             cache_ttl_seconds = settings.api_key_cache_ttl_seconds
         self._cache_ttl = cache_ttl_seconds
@@ -131,11 +159,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             try:
                 api_key_info = await self._lookup(api_key)
             except Exception as e:
-                print("\n[ERROR] Exception during API key validation")
-                print(f"[ERROR] Type: {type(e).__name__}")
-                print(f"[ERROR] Message: {str(e)}")
-                import traceback
-                print(f"[ERROR] Traceback:\n{traceback.format_exc()}\n")
+                # Backend exceptions may contain credentials or request data.
+                logger.error("API key validation failed type=%s", type(e).__name__)
                 return None
 
             if self._cache_ttl > 0:
@@ -173,6 +198,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         Raises:
             HTTPException: If authentication fails
         """
+        # Uvicorn MUST leave scope['client'] untouched (--no-proxy-headers).
+        # Resolve once per request, never as part of the cached key lookup.
+        source = self._client_ip_trust.resolve(getattr(request, "scope", {}))
+        request.state.client_ip = source.source_ip
+        request.state.client_ip_reason = source.reason
+        if source.forwarded_proto is not None:
+            request.scope["scheme"] = source.forwarded_proto
+
         # Skip authentication for health check and docs endpoints
         skip_auth_paths = ["/health", "/health/ptc", "/ready", "/liveness", "/docs", "/openapi.json", "/redoc", "/"]
         if request.url.path in skip_auth_paths:
@@ -181,6 +214,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Skip if API key is not required
         if not settings.require_api_key:
             request.state.api_key_info = None
+            request.state.access_policy = UNRESTRICTED_POLICY
             return await call_next(request)
 
         # Extract API key from header (x-api-key first, fall back to Authorization: Bearer)
@@ -191,17 +225,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 api_key = authz[len("Bearer "):].strip()
 
         if not api_key:
-            print(f"[AUTH] Missing API key for {request.url.path}")
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "type": "error",
-                    "error": {
-                        "type": "authentication_error",
-                        "message": f"Missing API key in {settings.api_key_header} or Authorization: Bearer header",
-                    },
-                },
+            return _auth_error(
+                request,
+                status.HTTP_401_UNAUTHORIZED,
+                f"Missing API key in {settings.api_key_header} or Authorization: Bearer header",
             )
 
         # Check master API key first (if configured)
@@ -213,6 +240,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "rate_limit": None,  # No rate limit for master key
                 "cache_ttl": None,
             }
+            request.state.access_policy = UNRESTRICTED_POLICY
             return await call_next(request)
 
         # Validate API key (in-process cache, DynamoDB on miss)
@@ -222,19 +250,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Deliberately do not log the rejected key (or any derivative of
             # it). The 401 response is the operational signal; aggregate
             # rate-limit metrics are the right place to fingerprint abuse.
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "type": "error",
-                    "error": {
-                        "type": "authentication_error",
-                        "message": "Invalid API key",
-                    },
-                },
-            )
+            return _auth_error(request, status.HTTP_401_UNAUTHORIZED, "Invalid API key")
 
-        # Attach API key info to request state
+        # Parse only after successful auth. Corrupt policy is not legacy access.
+        # Catch only the admission check, not denials from later service layers.
+        try:
+            policy = policy_from_key_info(api_key_info)
+            require_ip(policy, source.source_ip)
+        except AccessPolicyDenied as exc:
+            denial_id = uuid4().hex  # Server-generated, not a header or key derivative.
+            logger.warning(
+                "Access policy denied reason=%s source_reason=%s client_ip=%s",
+                exc.reason,
+                source.reason,
+                source.source_ip,
+                extra={"request_id": denial_id},
+            )
+            response = _auth_error(request, status.HTTP_403_FORBIDDEN, str(exc))
+            response.headers["x-request-id"] = denial_id
+            return response
+
+        # Immutable snapshot for future handler/service authorization.
+        request.state.access_policy = policy
         request.state.api_key_info = api_key_info
 
         # Process request

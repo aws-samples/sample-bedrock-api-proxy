@@ -26,6 +26,8 @@ from app.schemas.anthropic import (
     MessageResponse,
 )
 from app.services.bedrock_service import BedrockService
+from app.core.access_policy import AccessPolicyDenied, UNRESTRICTED_POLICY
+from app.services.model_access import ModelAccessService, preflight_model, model_denial_event, guard_model_stream
 from app.services.image_url_fetcher import ImageUrlFetchError, resolve_image_urls
 from app.services.ptc_service import PTCService, get_ptc_service
 from app.services.ptc import DockerNotAvailableError, SandboxError, ToolCallRequest, ExecutionResult
@@ -257,7 +259,7 @@ async def create_message(
     request: Request,
     anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
     api_key_info: dict = Depends(get_api_key_info),
-    bedrock_service: BedrockService = Depends(get_bedrock_service),
+    bedrock_service: BedrockService | ModelAccessService = Depends(get_bedrock_service),
     usage_tracker: UsageTracker = Depends(get_usage_tracker),
     ptc_service: PTCService = Depends(get_ptc_service_dep),
     standalone_service: StandaloneCodeExecutionService = Depends(get_standalone_service_dep),
@@ -296,6 +298,52 @@ async def create_message(
     """
     request_id = f"msg-{uuid4().hex}"
 
+    # Preflight restricted requests before downloads, sandboxes or SSE headers.
+    # Missing successfully-admitted policies are legacy unrestricted snapshots.
+    policy = getattr(request.state, "access_policy", UNRESTRICTED_POLICY)
+    model_access = None
+    access_decision = None
+    if policy.model_enabled:
+        try:
+            uses_tools = (
+                PTCService.is_ptc_request(request_data, anthropic_beta)
+                or StandaloneCodeExecutionService.is_standalone_request(request_data, anthropic_beta)
+                or WebSearchService.is_web_search_request(request_data)
+                or WebFetchService.is_web_fetch_request(request_data)
+            )
+            access_service = bedrock_service
+            if settings.multi_provider_enabled and not uses_tools:
+                registry = getattr(request.app.state, "provider_registry", None)
+                provider = registry.get_provider("bedrock") if registry else None
+                if provider is not None:
+                    access_service = provider._service
+            model_access = ModelAccessService(access_service, policy, api_key_info.get("provider_id"))
+            if settings.multi_provider_enabled and not uses_tools and settings.routing_enabled:
+                engine = getattr(request.app.state, "routing_engine", None)
+                if engine:
+                    access_decision = engine.route(
+                        request_data.model, _extract_last_user_text(request_data.messages) or "",
+                        api_key_info, is_cache_active=_is_cache_active_session(request_data),
+                        candidate_allowed=model_access.allows_candidate,
+                    )
+            saved_state = None
+            if PTCService.is_ptc_request(request_data, anthropic_beta) and request_data.container:
+                if _extract_ptc_tool_result(request_data, request_data.container, ptc_service):
+                    saved_state = ptc_service.get_pending_execution(request_data.container)
+            if access_decision is None:
+                preflight_model(model_access, request_data.model, saved_state)
+            bedrock_service = model_access
+        except AccessPolicyDenied as exc:
+            logger.warning("Model access denied reason=%s request_id=%s", exc.reason, request_id)
+            raise HTTPException(403, detail={"type": "permission_error", "message": str(exc)}) from None
+        except BedrockAPIError as exc:
+            raise HTTPException(exc.http_status, detail={"type": exc.error_type, "message": exc.error_message}) from None
+
+    def stream_response(events, **kwargs):
+        if model_access:
+            events = guard_model_stream(events, request_data.model)
+        return StreamingResponse(events, **kwargs)
+
     # Resolve any image URL sources (download + base64) before downstream processing.
     # Mutates request_data.messages in place; raises ImageUrlFetchError on any failure.
     try:
@@ -326,7 +374,6 @@ async def create_message(
     print(f"[REQUEST] Stream: {request_data.stream}")
     print(f"[REQUEST] Beta: {anthropic_beta}")
     print(f"[REQUEST] Container: {container_id}")
-    print(f"[REQUEST] API Key: {api_key_info.get('api_key', 'unknown')[:20]}...")
     print(f"{'='*80}\n")
 
     # Get service_tier from API key info (defaults to 'default' if not set)
@@ -463,7 +510,7 @@ async def create_message(
                             logger.info(f"[PTC Streaming] Resuming sandbox execution for session {session_id}")
 
                         _end_trace_spans()
-                        return StreamingResponse(
+                        return stream_response(
                             ptc_service.handle_tool_result_continuation_streaming(
                                 session_id=session_id,
                                 tool_result=tool_result_content,
@@ -484,7 +531,7 @@ async def create_message(
                     else:
                         # New PTC request - streaming
                         _end_trace_spans()
-                        return StreamingResponse(
+                        return stream_response(
                             ptc_service.handle_ptc_request_streaming(
                                 request=request_data,
                                 bedrock_service=bedrock_service,
@@ -550,6 +597,8 @@ async def create_message(
 
                 # Add container info to response
                 response_dict = response.model_dump()
+                if model_access:
+                    response_dict["model"] = request_data.model
                 if container_info:
                     response_dict["container"] = container_info.model_dump()
 
@@ -601,7 +650,7 @@ async def create_message(
                 session = await standalone_service._get_or_create_session(container_id)
 
                 _end_trace_spans()
-                return StreamingResponse(
+                return stream_response(
                     standalone_service.handle_request_streaming(
                         request=request_data,
                         bedrock_service=bedrock_service,
@@ -646,6 +695,8 @@ async def create_message(
 
                 # Add container info to response
                 response_dict = response.model_dump()
+                if model_access:
+                    response_dict["model"] = request_data.model
                 if container_info:
                     response_dict["container"] = container_info.model_dump()
 
@@ -710,6 +761,9 @@ async def create_message(
                                                 accumulated["output"] = u["output_tokens"]
                                 except (json.JSONDecodeError, IndexError, KeyError):
                                     pass
+                            if model_access and sse_event.startswith("event: error\n"):
+                                ws_success = False
+                                ws_error = "Streaming request failed"
                             yield sse_event
                     except Exception as e:
                         ws_success = False
@@ -726,7 +780,7 @@ async def create_message(
                             error_message=ws_error,
                         )
 
-                return StreamingResponse(
+                return stream_response(
                     _web_search_stream_with_usage(),
                     media_type="text/event-stream",
                     headers={
@@ -818,6 +872,9 @@ async def create_message(
                                                 accumulated["output"] = u["output_tokens"]
                                 except (json.JSONDecodeError, IndexError, KeyError):
                                     pass
+                            if model_access and sse_event.startswith("event: error\n"):
+                                wf_success = False
+                                wf_error = "Streaming request failed"
                             yield sse_event
                     except Exception as e:
                         wf_success = False
@@ -834,7 +891,7 @@ async def create_message(
                             error_message=wf_error,
                         )
 
-                return StreamingResponse(
+                return stream_response(
                     _web_fetch_stream_with_usage(),
                     media_type="text/event-stream",
                     headers={
@@ -898,7 +955,10 @@ async def create_message(
             # 2. Routing decision
             target_provider = "bedrock"
             target_model = request_data.model
-            if settings.routing_enabled:
+            if access_decision is not None:
+                target_provider = access_decision.provider
+                target_model = access_decision.model
+            elif settings.routing_enabled:
                 routing_engine = getattr(request.app.state, "routing_engine", None)
                 if routing_engine:
                     user_msg = _extract_last_user_text(request_data.messages) or ""
@@ -907,6 +967,7 @@ async def create_message(
                     decision = routing_engine.route(
                         request_data.model, user_msg, api_key_info,
                         is_cache_active=is_cache_active,
+                        **({"candidate_allowed": model_access.allows_candidate} if model_access else {}),
                     )
                     target_provider = decision.provider
                     target_model = decision.model
@@ -919,12 +980,14 @@ async def create_message(
             failover_mgr = getattr(request.app.state, "failover_manager", None)
             provider_registry = getattr(request.app.state, "provider_registry", None)
 
+            if model_access and not model_access.allows_candidate(target_provider, target_model):
+                raise AccessPolicyDenied("model_not_allowed")
             decrypted_key = None
             key_id = None
             if key_pool:
                 key_result = key_pool.get_available_key(target_provider, target_model)
                 if key_result is None and settings.failover_enabled and failover_mgr:
-                    failover_result = failover_mgr.find_failover(target_model)
+                    failover_result = failover_mgr.find_failover(target_model, **({"candidate_allowed": model_access.allows_candidate} if model_access else {}))
                     if failover_result:
                         decrypted_key, key_id, target_provider, target_model = failover_result
                     else:
@@ -944,11 +1007,15 @@ async def create_message(
 
             # 4. Provider invocation
             provider = provider_registry.get_provider(target_provider) if provider_registry else None
+            if model_access:
+                if provider is None:
+                    raise HTTPException(503, detail={"type": "api_error", "message": "Selected provider unavailable"})
+                model_access.prepare(target_model)
             if provider:
                 if request_data.stream:
                     _end_trace_spans()
-                    return StreamingResponse(
-                        provider.invoke_stream(request_data, target_model, api_key_info),
+                    return stream_response(
+                        provider.invoke_stream(request_data, target_model, api_key_info, **({"model_access": model_access} if model_access else {})),
                         media_type="text/event-stream",
                         headers={
                             "Cache-Control": "no-cache",
@@ -957,7 +1024,7 @@ async def create_message(
                         },
                     )
                 else:
-                    result = await provider.invoke(request_data, target_model, api_key_info)
+                    result = await provider.invoke(request_data, target_model, api_key_info, **({"model_access": model_access} if model_access else {}))
                     # Record usage
                     usage_tracker.record_usage_nowait(
                         api_key=api_key_info.get("api_key"),
@@ -999,7 +1066,7 @@ async def create_message(
                     tracer=_tracer,
                 )
                 generator = accumulator.wrap_stream(generator)
-            return StreamingResponse(
+            return stream_response(
                 generator,
                 media_type="text/event-stream",
                 headers={
@@ -1073,6 +1140,11 @@ async def create_message(
             )
 
             return response
+
+    except AccessPolicyDenied as exc:
+        _end_trace_spans(exc)
+        logger.warning("Model access denied reason=%s request_id=%s", exc.reason, request_id)
+        raise HTTPException(403, detail={"type": "permission_error", "message": str(exc)}) from None
 
     except HTTPException as he:
         # Re-raise HTTP exceptions
@@ -1284,7 +1356,7 @@ async def _handle_streaming_request(
     request_data: MessageRequest,
     request_id: str,
     api_key_info: dict,
-    bedrock_service: BedrockService,
+    bedrock_service: BedrockService | ModelAccessService,
     usage_tracker: UsageTracker,
     service_tier: str = "default",
     anthropic_beta: Optional[str] = None,
@@ -1328,6 +1400,9 @@ async def _handle_streaming_request(
                     if data_line:
                         event_data = json.loads(data_line[0][5:].strip())
                         event_type = event_data.get("type")
+                        if isinstance(bedrock_service, ModelAccessService) and event_type == "error":
+                            success = False
+                            error_message = event_data.get("error", {}).get("message")
 
                         # Extract usage from message_start (initial usage)
                         if event_type == "message_start" and "message" in event_data:
@@ -1360,6 +1435,10 @@ async def _handle_streaming_request(
 
         print(f"[STREAMING] Stream completed successfully for request {request_id}")
 
+    except AccessPolicyDenied as exc:
+        success = False
+        error_message = str(exc)
+        yield model_denial_event(exc)
     except Exception as e:
         success = False
         error_message = str(e)
@@ -1426,8 +1505,9 @@ async def get_message(message_id: str):
 )
 async def count_tokens(
     request_data: CountTokensRequest,
+    request: Request,
     api_key_info: dict = Depends(get_api_key_info),
-    bedrock_service: BedrockService = Depends(get_bedrock_service),
+    bedrock_service: BedrockService | ModelAccessService = Depends(get_bedrock_service),
 ):
     """
     Count tokens in messages (Anthropic-compatible endpoint).
@@ -1449,11 +1529,16 @@ async def count_tokens(
     """
     provider_id = api_key_info.get("provider_id") if api_key_info else None
     try:
+        policy = getattr(request.state, "access_policy", UNRESTRICTED_POLICY)
+        if policy.model_enabled:
+            bedrock_service = ModelAccessService(bedrock_service, policy, provider_id)
         # Count tokens using the Bedrock service (async to not block event loop)
         token_count = await bedrock_service.count_tokens(request_data, provider_id=provider_id)
 
         return CountTokensResponse(input_tokens=token_count)
 
+    except AccessPolicyDenied as exc:
+        raise HTTPException(403, detail={"type": "permission_error", "message": str(exc)}) from None
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
