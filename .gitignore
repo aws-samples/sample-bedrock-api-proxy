@@ -31,3 +31,6 @@ cdk/cdk.context.json
 .mypy_cache/
 .ruff_cache/
 .github/
+
+# Trellis local workflow state
+.trellis/
