@@ -48,7 +48,7 @@ dependencies = [
     # Web Search (Tavily provider)
     "tavily-python>=0.5.0",
     # Encryption (for Provider Key encryption)
-    "cryptography>=46.0.5",
+    "cryptography>=50.0.0",
 ]
 
 [project.optional-dependencies]
