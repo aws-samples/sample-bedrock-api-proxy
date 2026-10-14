@@ -28,16 +28,16 @@ def stub_default_mapping(monkeypatch):
 
 
 def _install_fake_ddb(monkeypatch, mappings):
-    """Patch DynamoDBClient so list_mappings() returns the given rows."""
+    """Patch DynamoDBClient/ModelMappingManager so list_mappings() returns the given rows."""
     fake_manager = MagicMock()
     fake_manager.list_mappings.return_value = mappings
 
     fake_client = MagicMock()
-    fake_client.model_mapping_manager = fake_manager
 
     from app.db import dynamodb as ddb_mod
 
     monkeypatch.setattr(ddb_mod, "DynamoDBClient", lambda: fake_client)
+    monkeypatch.setattr(ddb_mod, "ModelMappingManager", lambda client: fake_manager)
     return fake_manager
 
 
