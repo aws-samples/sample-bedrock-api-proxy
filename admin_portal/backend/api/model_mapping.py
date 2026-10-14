@@ -1,8 +1,11 @@
 """Model Mapping management routes."""
 import asyncio
+import logging
 import sys
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -30,7 +33,34 @@ from admin_portal.backend.services import speed_test
 
 SPEED_TEST_HISTORY_MAX_LIMIT = 50
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _coerce_epoch(value: Any) -> Optional[int]:
+    """Read a timestamp column as epoch seconds, whatever shape it was stored in.
+
+    `set_mapping()` writes `int(time.time())`, but rows written by ad-hoc tooling
+    carry ISO-8601 strings. A bare `int()` on those raises, and one such row is
+    enough to fail the whole listing, so unparseable values degrade to None.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        pass
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        logger.warning("Unparseable model-mapping timestamp %r; reporting as unset", text)
+        return None
 
 
 def get_manager():
@@ -71,7 +101,7 @@ def _merged_mappings() -> List[ModelMappingResponse]:
             bedrock_model_id=mapping.get("bedrock_model_id", ""),
             source="override" if default_bedrock_id is not None else "custom",
             default_bedrock_model_id=default_bedrock_id,
-            updated_at=int(updated_at_val) if updated_at_val is not None else None,
+            updated_at=_coerce_epoch(updated_at_val),
         ))
 
     return items
@@ -207,7 +237,7 @@ async def get_model_mapping(anthropic_model_id: str):
                     bedrock_model_id=bedrock_id,
                     source="override" if default_bedrock_id is not None else "custom",
                     default_bedrock_model_id=default_bedrock_id,
-                    updated_at=int(updated_at_val) if updated_at_val is not None else None,
+                    updated_at=_coerce_epoch(updated_at_val),
                 )
 
     # Check default mapping
@@ -257,7 +287,7 @@ async def create_model_mapping(request: ModelMappingCreate):
                 bedrock_model_id=request.bedrock_model_id,
                 source=source,
                 default_bedrock_model_id=default_bedrock_id,
-                updated_at=int(updated_at_val) if updated_at_val is not None else None,
+                updated_at=_coerce_epoch(updated_at_val),
             )
 
     return ModelMappingResponse(
@@ -304,7 +334,7 @@ async def update_model_mapping(anthropic_model_id: str, request: ModelMappingUpd
                 bedrock_model_id=request.bedrock_model_id,
                 source=source,
                 default_bedrock_model_id=default_bedrock_id,
-                updated_at=int(updated_at_val) if updated_at_val is not None else None,
+                updated_at=_coerce_epoch(updated_at_val),
             )
 
     return ModelMappingResponse(
