@@ -683,6 +683,96 @@ def responses_usage_to_chat_usage(raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+class _StreamedToolCalls:
+    """Map upstream Responses ``function_call`` items to Chat ``delta.tool_calls``.
+
+    Chat clients rebuild each call by concatenating ``function.arguments``
+    fragments that share an ``index``; the first fragment of a call carries its
+    ``id``, ``type`` and ``function.name``. This records what was already sent so
+    ``response.completed`` only adds calls (or argument tails) the incremental
+    events never delivered.
+    """
+
+    def __init__(self) -> None:
+        self._index_by_item: dict[str, int] = {}
+        self._index_by_output: dict[int, int] = {}
+        self._arguments: list[str] = []
+
+    @property
+    def count(self) -> int:
+        return len(self._arguments)
+
+    def _lookup(self, item_id: Any, output_index: Any) -> int | None:
+        if isinstance(item_id, str) and item_id in self._index_by_item:
+            return self._index_by_item[item_id]
+        if isinstance(output_index, int):
+            return self._index_by_output.get(output_index)
+        return None
+
+    def start(self, item: dict[str, Any], output_index: Any) -> dict[str, Any] | None:
+        """Opening entry for a function call seen for the first time."""
+        if self._lookup(item.get("id"), output_index) is not None:
+            return None
+        index = len(self._arguments)
+        if isinstance(item.get("id"), str):
+            self._index_by_item[item["id"]] = index
+        if isinstance(output_index, int):
+            self._index_by_output[output_index] = index
+        arguments = item.get("arguments", "") or ""
+        self._arguments.append(arguments)
+        return {
+            "index": index,
+            # Same id fallback as _extract_response_tool_calls (non-streaming).
+            "id": item.get("call_id") or item.get("id") or f"call_{index}",
+            "type": "function",
+            "function": {"name": item.get("name", ""), "arguments": arguments},
+        }
+
+    def append(
+        self, item_id: Any, output_index: Any, fragment: Any
+    ) -> dict[str, Any] | None:
+        """Argument fragment for a call that was already opened."""
+        index = self._lookup(item_id, output_index)
+        if index is None or not isinstance(fragment, str) or not fragment:
+            return None
+        self._arguments[index] += fragment
+        return {"index": index, "function": {"arguments": fragment}}
+
+    def finish(self, response: dict[str, Any]) -> list[dict[str, Any]]:
+        """Entries for calls, or argument tails, missing from the stream."""
+        entries: list[dict[str, Any]] = []
+        for output_index, item in enumerate(response.get("output") or []):
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            index = self._lookup(item.get("id"), output_index)
+            if index is None:
+                opened = self.start(item, output_index)
+                if opened is not None:
+                    entries.append(opened)
+                continue
+            arguments = item.get("arguments", "") or ""
+            sent = self._arguments[index]
+            if len(arguments) > len(sent) and arguments.startswith(sent):
+                entries.append(
+                    {"index": index, "function": {"arguments": arguments[len(sent) :]}}
+                )
+                self._arguments[index] = arguments
+        return entries
+
+
+def _tool_calls_chunk(
+    response_id: str, model: str, created: int, tool_calls: list[dict[str, Any]]
+) -> bytes:
+    return _chat_sse(
+        _chat_chunk(
+            response_id,
+            model,
+            created,
+            [{"index": 0, "delta": {"tool_calls": tool_calls}}],
+        )
+    )
+
+
 async def stream_responses_as_chat_completions(
     resp: httpx.Response,
     *,
@@ -696,6 +786,7 @@ async def stream_responses_as_chat_completions(
     created = int(time.time())
     usage: dict[str, Any] = {}
     done_sent = False
+    streamed_tool_calls = _StreamedToolCalls()
     restricted = (
         isinstance(on_response_id, ResponseRegistration)
         and on_response_id.policy.model_enabled
@@ -726,6 +817,8 @@ async def stream_responses_as_chat_completions(
                 if not registered_id and event_type in {
                     "response.created",
                     "response.output_text.delta",
+                    "response.output_item.added",
+                    "response.function_call_arguments.delta",
                     "response.completed",
                 }:
                     # Never expose an invented, unattributed chat ID.
@@ -757,28 +850,49 @@ async def stream_responses_as_chat_completions(
                         )
                     )
 
+            elif event_type == "response.output_item.added":
+                item = payload.get("item")
+                if isinstance(item, dict) and item.get("type") == "function_call":
+                    opened = streamed_tool_calls.start(
+                        item, payload.get("output_index")
+                    )
+                    if opened is not None:
+                        yield _tool_calls_chunk(
+                            response_id, response_model, created, [opened]
+                        )
+
+            elif event_type == "response.function_call_arguments.delta":
+                fragment = streamed_tool_calls.append(
+                    payload.get("item_id"),
+                    payload.get("output_index"),
+                    payload.get("delta"),
+                )
+                if fragment is not None:
+                    yield _tool_calls_chunk(
+                        response_id, response_model, created, [fragment]
+                    )
+
             elif event_type == "response.completed":
                 response_obj = payload.get("response") or {}
-                tool_calls = (
-                    _extract_response_tool_calls(response_obj)
-                    if isinstance(response_obj, dict)
-                    else []
-                )
+                if not isinstance(response_obj, dict):
+                    response_obj = {}
+                # Upstreams that skip the incremental events (or truncate them)
+                # still deliver every call before finish_reason.
+                missing = streamed_tool_calls.finish(response_obj)
+                if missing:
+                    yield _tool_calls_chunk(
+                        response_id, response_model, created, missing
+                    )
+                tool_calls = _extract_response_tool_calls(response_obj)
+                finish_reason = _finish_reason(response_obj, tool_calls)
+                if finish_reason == "stop" and streamed_tool_calls.count:
+                    finish_reason = "tool_calls"
                 yield _chat_sse(
                     _chat_chunk(
                         response_id,
                         response_model,
                         created,
-                        [
-                            {
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": _finish_reason(
-                                    response_obj if isinstance(response_obj, dict) else {},
-                                    tool_calls,
-                                ),
-                            }
-                        ],
+                        [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
                     )
                 )
                 if isinstance(response_obj, dict):
