@@ -53,6 +53,28 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 SERVE_STATIC = os.environ.get("SERVE_STATIC_FILES", "true").lower() == "true"
 
 
+def resolve_frontend_file(path: str, frontend_dir: Path = FRONTEND_DIR) -> Path | None:
+    """Map a ``/admin/{path}`` request onto a file inside ``frontend_dir``.
+
+    Returns the resolved file path only when it is a regular file contained in
+    ``frontend_dir``; returns ``None`` for empty paths, traversal attempts
+    (``..``, absolute paths, symlinks escaping the build directory), invalid
+    paths (e.g. embedded NUL bytes) and non-existent files.
+    """
+    if not path:
+        return None
+    try:
+        root = frontend_dir.resolve(strict=True)
+        candidate = (root / path).resolve()
+        if not candidate.is_relative_to(root):
+            return None
+        if not candidate.is_file():
+            return None
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
@@ -160,9 +182,12 @@ if SERVE_STATIC and FRONTEND_DIR.exists():
                 content={"error": "not_found", "message": f"API endpoint not found: /admin/{path}"}
             )
 
-        # Check if requesting a specific static file
-        static_file = FRONTEND_DIR / path
-        if path and static_file.exists() and static_file.is_file():
+        # Check if requesting a specific static file. Only files that resolve
+        # inside FRONTEND_DIR may be served; anything else (``..`` segments,
+        # percent-encoded traversal, absolute paths, symlinks pointing out of
+        # the build dir) falls through to the SPA index.
+        static_file = resolve_frontend_file(path)
+        if static_file is not None:
             return FileResponse(static_file)
 
         # Otherwise, return index.html for SPA routing
@@ -192,7 +217,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        # Loopback by default for local runs; containers pass --host explicitly.
+        host=os.environ.get("ADMIN_PORTAL_HOST", "127.0.0.1"),
         port=ADMIN_PORT,
         reload=True,
     )
