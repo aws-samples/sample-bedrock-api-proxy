@@ -53,6 +53,40 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 SERVE_STATIC = os.environ.get("SERVE_STATIC_FILES", "true").lower() == "true"
 
 
+def build_frontend_file_index(frontend_dir: Path) -> dict[str, Path]:
+    """Index every servable file in the frontend build directory.
+
+    Keys are POSIX paths relative to ``frontend_dir`` (e.g. ``"favicon.svg"``,
+    ``"assets/index-abc.js"``). Symlinks whose target resolves outside the
+    build directory are skipped. The build output is immutable at runtime, so
+    the index is built once and request paths are only ever used as lookup
+    keys - never joined onto the filesystem.
+    """
+    index: dict[str, Path] = {}
+    try:
+        root = frontend_dir.resolve(strict=True)
+    except OSError:
+        return index
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            real = Path(os.path.realpath(os.path.join(dirpath, name)))
+            if not real.is_relative_to(root) or not real.is_file():
+                continue
+            rel = Path(dirpath, name).relative_to(root).as_posix()
+            index[rel] = real
+    return index
+
+
+def resolve_frontend_file(path: str, file_index: dict[str, Path]) -> Path | None:
+    """Return the indexed build file for a ``/admin/{path}`` request, if any.
+
+    Anything not present verbatim in the index - ``..`` segments (raw or
+    percent-encoded), absolute paths, NUL bytes, missing files - returns
+    ``None`` so the caller falls back to the SPA index.
+    """
+    return file_index.get(path)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
@@ -139,6 +173,9 @@ if SERVE_STATIC and FRONTEND_DIR.exists():
     print(f"Mounting static files from {FRONTEND_DIR}")
 
     # Mount static assets (js, css, images) at /admin/assets/
+    # Allowlist of servable build files (see resolve_frontend_file)
+    FRONTEND_FILES = build_frontend_file_index(FRONTEND_DIR)
+
     assets_dir = FRONTEND_DIR / "assets"
     if assets_dir.exists():
         app.mount("/admin/assets", StaticFiles(directory=str(assets_dir)), name="assets")
@@ -160,9 +197,12 @@ if SERVE_STATIC and FRONTEND_DIR.exists():
                 content={"error": "not_found", "message": f"API endpoint not found: /admin/{path}"}
             )
 
-        # Check if requesting a specific static file
-        static_file = FRONTEND_DIR / path
-        if path and static_file.exists() and static_file.is_file():
+        # Check if requesting a specific static file. Only files in the
+        # build-time allowlist may be served; anything else (``..`` segments,
+        # percent-encoded traversal, absolute paths, symlinks pointing out of
+        # the build dir) falls through to the SPA index.
+        static_file = resolve_frontend_file(path, FRONTEND_FILES)
+        if static_file is not None:
             return FileResponse(static_file)
 
         # Otherwise, return index.html for SPA routing
@@ -192,7 +232,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        # Loopback by default for local runs; containers pass --host explicitly.
+        host=os.environ.get("ADMIN_PORTAL_HOST", "127.0.0.1"),
         port=ADMIN_PORT,
         reload=True,
     )

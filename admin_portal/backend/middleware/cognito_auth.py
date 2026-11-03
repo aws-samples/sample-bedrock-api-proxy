@@ -30,10 +30,40 @@ SKIP_AUTH_PATHS: Set[str] = {
     "/api/auth/config",  # Config endpoint must be accessible without auth
 }
 
-# Path prefixes that don't require authentication (for static files and SPA routes)
-SKIP_AUTH_PATH_PREFIXES: tuple = (
-    "/admin",  # SPA routes and static files - frontend handles its own auth
-)
+# The SPA shell is served without authentication: it is public build output
+# (index.html + bundled assets) that contains no data. Every data request the
+# SPA makes goes to /api/*, which always requires a valid Cognito JWT. Deep
+# links such as /admin/keys must stay reachable without a token because the
+# browser navigates to them directly (BrowserRouter basename="/admin").
+SPA_ROOT = "/admin"
+SPA_PREFIX = "/admin/"
+
+# Opt-in escape hatch for local development without Cognito. Defaults to deny:
+# when Cognito is not configured and this is not set, protected routes fail
+# closed with 503 instead of silently granting anonymous admin access.
+DEV_AUTH_BYPASS_ENV = "ADMIN_PORTAL_DEV_AUTH_BYPASS"
+
+
+def is_public_spa_path(path: str) -> bool:
+    """Return True if ``path`` is an SPA route/asset that may skip auth.
+
+    Only ``/admin`` and ``/admin/<segments>`` qualify (not ``/adminfoo``), and
+    any path containing traversal segments, backslashes or NUL bytes is
+    rejected so it is never exempted from authentication.
+    """
+    if path == SPA_ROOT:
+        return True
+    if not path.startswith(SPA_PREFIX):
+        return False
+    if "\\" in path or "\x00" in path:
+        return False
+    segments = path[len(SPA_PREFIX):].split("/")
+    return not any(seg in ("..", ".") for seg in segments)
+
+
+def dev_auth_bypass_enabled() -> bool:
+    """Whether unauthenticated dev-mode access was explicitly requested."""
+    return os.getenv(DEV_AUTH_BYPASS_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
 class CognitoAuthMiddleware(BaseHTTPMiddleware):
@@ -85,8 +115,8 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in SKIP_AUTH_PATHS:
             return await call_next(request)
 
-        # Skip auth for path prefixes (static files, SPA routes)
-        if request.url.path.startswith(SKIP_AUTH_PATH_PREFIXES):
+        # Skip auth for the public SPA shell (static files, client-side routes)
+        if is_public_spa_path(request.url.path):
             return await call_next(request)
 
         # Skip auth for OPTIONS requests (CORS preflight)
@@ -99,8 +129,21 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
 
         # Check if Cognito is configured
         if not self.is_configured:
-            # Development mode - allow access without authentication
-            # This allows testing when Cognito is not set up
+            if not dev_auth_bypass_enabled():
+                # Fail closed: a misconfigured deployment must not expose the
+                # admin API anonymously.
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={
+                        "error": "auth_not_configured",
+                        "message": (
+                            "Cognito is not configured (COGNITO_USER_POOL_ID / "
+                            "COGNITO_CLIENT_ID). For local development only, set "
+                            f"{DEV_AUTH_BYPASS_ENV}=true to bypass authentication."
+                        ),
+                    },
+                )
+            # Explicit local-development bypass
             request.state.user = {
                 "username": "dev-user",
                 "email": "dev@example.com",
