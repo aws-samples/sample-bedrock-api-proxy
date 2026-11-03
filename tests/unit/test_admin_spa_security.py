@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.testclient import TestClient
 
-from admin_portal.backend.main import resolve_frontend_file
+from admin_portal.backend.main import build_frontend_file_index, resolve_frontend_file
 from admin_portal.backend.middleware.cognito_auth import (
     DEV_AUTH_BYPASS_ENV,
     CognitoAuthMiddleware,
@@ -42,8 +42,8 @@ def layout(tmp_path):
 
 
 def test_resolve_serves_files_inside_dist(layout):
-    assert resolve_frontend_file("favicon.svg", layout) == (layout / "favicon.svg").resolve()
-    assert resolve_frontend_file("assets/app.js", layout) == (layout / "assets" / "app.js").resolve()
+    assert resolve_frontend_file("favicon.svg", build_frontend_file_index(layout)) == (layout / "favicon.svg").resolve()
+    assert resolve_frontend_file("assets/app.js", build_frontend_file_index(layout)) == (layout / "assets" / "app.js").resolve()
 
 
 @pytest.mark.parametrize(
@@ -62,7 +62,16 @@ def test_resolve_serves_files_inside_dist(layout):
     ],
 )
 def test_resolve_rejects_traversal_and_non_files(layout, path):
-    assert resolve_frontend_file(path, layout) is None
+    assert resolve_frontend_file(path, build_frontend_file_index(layout)) is None
+
+
+def test_index_excludes_escaping_symlinks(layout):
+    index = build_frontend_file_index(layout)
+    assert set(index) == {"index.html", "favicon.svg", "assets/app.js"}
+
+
+def test_index_missing_dir_is_empty(tmp_path):
+    assert build_frontend_file_index(tmp_path / "nope") == {}
 
 
 # ------------------------------------------------------------------ is_public_spa_path
@@ -101,6 +110,7 @@ def _build_app(dist, monkeypatch, configured: bool):
     monkeypatch.setenv("COGNITO_CLIENT_ID", "client" if configured else "")
     app = FastAPI()
     app.add_middleware(CognitoAuthMiddleware)
+    files = build_frontend_file_index(dist)
 
     @app.get("/api/keys")
     async def keys():
@@ -112,7 +122,7 @@ def _build_app(dist, monkeypatch, configured: bool):
     async def spa(request: Request, path: str = ""):
         if path.startswith("api/"):
             return JSONResponse(status_code=404, content={})
-        f = resolve_frontend_file(path, dist)
+        f = resolve_frontend_file(path, files)
         if f is not None:
             return FileResponse(f)
         return FileResponse(dist / "index.html")
