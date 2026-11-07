@@ -46,25 +46,25 @@ def run_deploy(env_local=os.devnull, **env_overrides):
     )
 
 
-@pytest.mark.parametrize(
-    "flag,expected_message",
-    [
-        ("ENABLE_OPENAI_COMPAT",
-         "BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true"),
-        # Passthrough was omitted from the original guard, so prod ran with the
-        # feature enabled and no credentials for weeks.
-        ("ENABLE_OPENAI_PASSTHROUGH",
-         "BEDROCK_API_KEY is required when ENABLE_OPENAI_PASSTHROUGH=true"),
-    ],
-)
-def test_deploy_requires_bedrock_api_key(flag, expected_message):
+SIGV4_NOTICE = "BEDROCK_API_KEY not set: Mantle/Runtime calls will use the ECS task role (SigV4)."
+
+
+@pytest.mark.parametrize("flag", ["ENABLE_OPENAI_COMPAT", "ENABLE_OPENAI_PASSTHROUGH"])
+def test_deploy_without_key_falls_back_to_task_role(flag):
+    """No key is no longer fatal: canonical endpoints are SigV4-signed.
+
+    Passthrough was once omitted from the old key guard, so prod ran with the
+    feature enabled and no credentials for weeks. The task role now always
+    provides credentials; a custom endpoint without a key is still rejected by
+    validateConfig() in cdk/config/config.ts at synth time.
+    """
     result = run_deploy(**{flag: "true"})
     output = result.stdout + result.stderr
 
-    assert result.returncode == 1, output
-    assert expected_message in output
-    # Must fail before doing any real work.
-    assert "Checking prerequisites" not in output
+    assert SIGV4_NOTICE in output, output
+    assert "BEDROCK_API_KEY is required" not in output
+    # Proceeds to the prerequisite check (which fails on the stubbed PATH).
+    assert "Checking prerequisites" in output
 
 
 def test_validation_survives_bash_3_2():
@@ -79,12 +79,12 @@ def test_validation_survives_bash_3_2():
 
 
 def test_flag_value_is_case_insensitive():
-    """TRUE/True/true must all trigger validation."""
+    """TRUE/True/true must all trigger the credential check."""
     for value in ("TRUE", "True", "true"):
         result = run_deploy(ENABLE_OPENAI_COMPAT=value)
         output = result.stdout + result.stderr
-        assert "BEDROCK_API_KEY is required" in output, (
-            f"ENABLE_OPENAI_COMPAT={value} did not trigger validation:\n{output}"
+        assert SIGV4_NOTICE in output, (
+            f"ENABLE_OPENAI_COMPAT={value} did not trigger the check:\n{output}"
         )
 
 
@@ -95,6 +95,7 @@ def test_no_validation_error_when_key_present():
     output = result.stdout + result.stderr
 
     assert "BEDROCK_API_KEY is required" not in output
+    assert SIGV4_NOTICE not in output
     # It should now progress to the prerequisite check (which fails on the
     # stubbed PATH — that is the expected stopping point, not a validation bug).
     assert "Checking prerequisites" in output
@@ -157,7 +158,8 @@ class TestEnvLocalLoader:
         result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true")
         output = result.stdout + result.stderr
 
-        assert "BEDROCK_API_KEY is required" in output, output
+        # Treated as "no key": the task-role notice appears.
+        assert SIGV4_NOTICE in output, output
 
     def test_quoted_and_spaced_values(self, tmp_path):
         env_file = tmp_path / ".env.local"

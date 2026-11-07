@@ -239,15 +239,13 @@ is_true() {
 
 if [[ "$DESTROY" != true && -z "${BEDROCK_API_KEY:-}" ]] \
    && { is_true "${ENABLE_OPENAI_COMPAT:-}" || is_true "${ENABLE_OPENAI_PASSTHROUGH:-}"; }; then
-    if is_true "${ENABLE_OPENAI_COMPAT:-}"; then
-        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true.${NC}"
-    else
-        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_PASSTHROUGH=true.${NC}"
-    fi
     if [[ -n "${OPENAI_API_KEY:-}" ]]; then
         echo -e "${YELLOW}OPENAI_API_KEY is deprecated for Bedrock Mantle. Use BEDROCK_API_KEY instead.${NC}"
+    else
+        # Canonical bedrock-mantle/bedrock-runtime endpoints are SigV4-signed with
+        # the ECS task role. A custom endpoint without a key fails in validateConfig.
+        echo -e "${YELLOW}BEDROCK_API_KEY not set: Mantle/Runtime calls will use the ECS task role (SigV4).${NC}"
     fi
-    exit 1
 fi
 
 # Determine PTC status

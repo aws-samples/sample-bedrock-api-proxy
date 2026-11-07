@@ -539,14 +539,16 @@ export function validateConfig(config: EnvironmentConfig, environmentName: strin
     );
   }
 
-  // Runtime can authenticate with the task role through SigV4.
+  // Canonical Runtime and Mantle endpoints authenticate with the task role
+  // through SigV4 when no key is set. Only custom endpoints need a bearer key.
   const hasBedrockApiKey = Boolean(process.env.BEDROCK_API_KEY || process.env.OPENAI_API_KEY);
-  const usesRuntimeEndpoint = /^https:\/\/bedrock-runtime\.[a-z0-9-]+\.(amazonaws\.com(?:\.cn)?|api\.aws)(?:\/|$)/.test(config.openaiBaseUrl || '');
-  if (needsMantleEndpoint && !usesRuntimeEndpoint && !hasBedrockApiKey) {
+  const usesAwsBedrockEndpoint = /^https:\/\/bedrock-(runtime|mantle)\.[a-z0-9-]+\.(amazonaws\.com(?:\.cn)?|api\.aws)(?:\/|$)/.test(config.openaiBaseUrl || '');
+  if (needsMantleEndpoint && config.openaiBaseUrl && !usesAwsBedrockEndpoint && !hasBedrockApiKey) {
     errors.push(
-      `openaiCompat/openaiPassthrough is enabled but no Bedrock API key is available. ` +
-      `Export BEDROCK_API_KEY for this deploy. Without it the proxy sends ` +
-      `'Authorization: Bearer ' with an empty token and Mantle rejects every request.`
+      `openaiCompat/openaiPassthrough is enabled with a custom endpoint ` +
+      `(${config.openaiBaseUrl}) but no Bedrock API key is available. Export ` +
+      `BEDROCK_API_KEY for this deploy. SigV4 with the task role is only used ` +
+      `for canonical bedrock-runtime/bedrock-mantle hosts.`
     );
   }
 
