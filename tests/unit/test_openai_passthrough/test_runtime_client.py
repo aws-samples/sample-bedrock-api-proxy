@@ -167,7 +167,8 @@ async def test_request_hook_signs_without_nonempty_bearer(monkeypatch, authoriza
     "url",
     [
         "https://provider.test/openai/v1/responses",
-        "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
+        "https://bedrock-mantle.us-west-2.api.aws.evil.test/openai/v1/responses",
+        "http://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
         "https://bedrock-runtime.us-west-2.amazonaws.com.evil.test/openai/v1/responses",
         "https://evil-bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses",
         "http://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses",
@@ -180,6 +181,41 @@ async def test_request_hook_never_signs_other_hosts(monkeypatch, url):
     await upstream._sign_runtime_request(request)
     signer.assert_not_called()
     assert "authorization" not in request.headers
+
+
+@pytest.mark.parametrize(
+    ("url", "service"),
+    [
+        ("https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses", "bedrock-mantle"),
+        ("https://bedrock-mantle.us-east-2.api.aws/v1/models", "bedrock-mantle"),
+        ("https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses", "bedrock"),
+    ],
+)
+async def test_request_hook_signs_mantle_and_runtime_without_bearer(url, service):
+    credentials = Credentials("task-access", "task-secret", "task-token")
+    request = httpx.Request(
+        "POST",
+        url,
+        json={"input": "hello"},
+        extensions={"bedrock_credentials": credentials},
+    )
+    await upstream._sign_runtime_request(request)
+    region = url.split(".")[1]
+    assert f"/{region}/{service}/aws4_request" in request.headers["authorization"]
+    assert request.headers["x-amz-security-token"] == "task-token"
+
+
+async def test_request_hook_preserves_bearer_on_mantle(monkeypatch):
+    signer = Mock()
+    monkeypatch.setattr(upstream, "sign_request", signer)
+    request = httpx.Request(
+        "POST",
+        "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses",
+        headers={"Authorization": "Bearer api-key"},
+    )
+    await upstream._sign_runtime_request(request)
+    signer.assert_not_called()
+    assert request.headers["authorization"] == "Bearer api-key"
 
 
 @pytest.mark.parametrize("authorization", ["Bearer api-key", "bearer api-key"])

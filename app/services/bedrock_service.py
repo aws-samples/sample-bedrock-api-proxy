@@ -46,6 +46,7 @@ from app.schemas.web_search import decode_content as _ws_decode
 from app.services.bedrock_openai import (
     REGION_PREFIXES,
     BedrockSigV4Auth,
+    is_aws_bedrock_url,
     is_runtime_model,
     resolve_runtime_base_url,
 )
@@ -179,14 +180,47 @@ class BedrockService:
         self._responses_services: dict[str, Any] = {}
         self._responses_services_lock = threading.Lock()
         self._openai_compat_service = None
-        use_global = settings.enable_openai_compat and settings.openai_api_key and settings.openai_base_url
+        # Without a global Bedrock API key, a canonical AWS endpoint is still
+        # usable: requests are SigV4-signed with the task role credentials.
+        global_sigv4 = bool(
+            not settings.openai_api_key
+            and settings.openai_base_url
+            and is_aws_bedrock_url(settings.openai_base_url)
+        )
+        use_global = settings.enable_openai_compat and settings.openai_base_url and (
+            settings.openai_api_key or global_sigv4
+        )
         use_override = bool(openai_base_url and openai_api_key)
-        if use_global or use_override:
+        if use_override:
             from app.services.openai_compat_service import OpenAICompatService
             self._openai_compat_service = OpenAICompatService(
                 base_url=openai_base_url,
                 api_key=openai_api_key,
             )
+        elif use_global and global_sigv4:
+            from app.services.openai_compat_service import OpenAICompatService
+            self._openai_compat_service = OpenAICompatService(
+                api_key="aws-sigv4",
+                http_client=httpx.Client(
+                    # Refreshable task-role credentials from the boto3 client.
+                    auth=BedrockSigV4Auth(
+                        self.client._request_signer._credentials,
+                        settings.aws_region,
+                    ),
+                    timeout=settings.bedrock_timeout,
+                ),
+            )
+            # BedrockService is per-request; close the supplied httpx client with it.
+            weakref.finalize(
+                self._openai_compat_service, self._openai_compat_service.client.close
+            )
+        elif use_global:
+            from app.services.openai_compat_service import OpenAICompatService
+            self._openai_compat_service = OpenAICompatService(
+                base_url=openai_base_url,
+                api_key=openai_api_key,
+            )
+        if self._openai_compat_service is not None:
             endpoint_source = "override" if openai_base_url else "settings"
             print(
                 f"[BEDROCK] OpenAI-compat mode enabled, "

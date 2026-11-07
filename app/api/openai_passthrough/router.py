@@ -507,12 +507,13 @@ def _restricted_search_service(service, policy, model, target, provider_id):
     else:
         import httpx
 
-        from app.services.bedrock_openai import BedrockSigV4Auth
+        from app.services.bedrock_openai import BedrockSigV4Auth, is_aws_bedrock_url
         from app.services.openai_compat_service import OpenAICompatService
 
         client_options = {}
+        # Runtime and Mantle both accept SigV4 when no bearer key is configured.
         if (
-            is_runtime_url(target.base_url) or is_runtime_model(model)
+            is_aws_bedrock_url(target.base_url) or is_runtime_model(model)
         ) and not target.api_key:
             client_options["http_client"] = httpx.Client(
                 auth=BedrockSigV4Auth(

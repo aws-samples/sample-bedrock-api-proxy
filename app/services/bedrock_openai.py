@@ -42,6 +42,11 @@ def is_runtime_url(url: str) -> bool:
     return bool(match and match.group(1) == "runtime")
 
 
+def is_aws_bedrock_url(url: str) -> bool:
+    """True for canonical bedrock-runtime or bedrock-mantle hosts (SigV4-signable)."""
+    return bool(_AWS_HOST.fullmatch(urlsplit(url).hostname or ""))
+
+
 def resolve_runtime_base_url(
     base_url: str | None = None, region: str | None = None
 ) -> str:
@@ -84,6 +89,10 @@ def sign_request(
         credentials = credentials.get_frozen_credentials()
     match = _AWS_HOST.fullmatch(request.url.host)
     signing_region = match.group(2) if match else (region or settings.aws_region)
+    # Runtime signs as "bedrock"; Mantle signs as "bedrock-mantle".
+    signing_service = (
+        "bedrock-mantle" if match and match.group(1) == "mantle" else "bedrock"
+    )
     # The SDK supplies a placeholder Bearer header when using IAM auth.
     request.headers.pop("authorization", None)
     request.headers.pop("x-amz-date", None)
@@ -94,7 +103,7 @@ def sign_request(
         data=request.content,
         headers=dict(request.headers),
     )
-    SigV4Auth(credentials, "bedrock", signing_region).add_auth(aws_request)
+    SigV4Auth(credentials, signing_service, signing_region).add_auth(aws_request)
     request.headers.update(dict(aws_request.headers))
 
 

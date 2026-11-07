@@ -20,6 +20,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.bedrock_openai import (
+    is_aws_bedrock_url,
     is_runtime_model,
     is_runtime_url,
     resolve_runtime_base_url,
@@ -30,8 +31,8 @@ _client: httpx.AsyncClient | None = None
 
 
 async def _sign_runtime_request(request: httpx.Request) -> None:
-    """Sign AWS Runtime requests without forwarding AWS credentials elsewhere."""
-    if request.url.scheme != "https" or not is_runtime_url(str(request.url)):
+    """Sign AWS Runtime/Mantle requests without forwarding AWS credentials elsewhere."""
+    if request.url.scheme != "https" or not is_aws_bedrock_url(str(request.url)):
         return
     authorization = request.headers.get("authorization", "").split(None, 1)
     if (

@@ -168,6 +168,29 @@ export class ECSStack extends cdk.Stack {
       })
     );
 
+    // Grant Bedrock Mantle permissions so OpenAI-compatible calls can be
+    // SigV4-signed with the task role when no BEDROCK_API_KEY is configured.
+    // Region is a wildcard because MANTLE_ENDPOINT_URL may point at a region
+    // other than the stack's.
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-mantle:Get*',
+          'bedrock-mantle:List*',
+          'bedrock-mantle:CreateInference',
+        ],
+        resources: [
+          this.formatArn({
+            service: 'bedrock-mantle',
+            region: '*',
+            resource: 'project',
+            resourceName: '*',
+          }),
+        ],
+      })
+    );
+
     if (config.webSearchProvider?.toLowerCase() === 'agentcore') {
       taskRole.addToPolicy(
         new iam.PolicyStatement({
