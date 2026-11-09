@@ -454,7 +454,7 @@ View metrics in CloudWatch Console:
 
 ### Development Environment
 
-**Estimated monthly cost:** ~$50-100
+**Cost drivers** (no fixed estimate: costs depend on region, traffic and Bedrock usage; model your own scenario with the [AWS Pricing Calculator](https://calculator.aws/)):
 
 - ECS Fargate: 1 task × 0.5 vCPU × 1GB RAM
 - ALB: 1 load balancer + LCU usage
@@ -464,7 +464,7 @@ View metrics in CloudWatch Console:
 
 ### Production Environment
 
-**Estimated monthly cost:** ~$200-500 (base) + usage
+**Cost drivers** (estimate with the [AWS Pricing Calculator](https://calculator.aws/) for your region, task count and traffic; Bedrock model usage is billed separately):
 
 - ECS Fargate: 2-10 tasks (auto-scaling)
 - ALB: Higher LCU usage
@@ -477,8 +477,8 @@ View metrics in CloudWatch Console:
 1. Use VPC endpoints to avoid NAT gateway charges for AWS API calls
 2. Enable DynamoDB auto-scaling for predictable traffic
 3. Review CloudWatch log retention (7 days dev, 30 days prod)
-4. Use Fargate Spot for non-critical workloads (70% discount)
-5. Consider using ARM64 (Graviton2) for 20% cost savings
+4. Use Fargate Spot for interruption-tolerant workloads; see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/) for current Spot rates in your region
+5. Consider ARM64 (Graviton) tasks, which are priced lower than x86 per vCPU-hour; see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/)
 
 ## Troubleshooting
 
@@ -577,7 +577,7 @@ ALB returns 504 if:
 
 ### Using Fargate Spot
 
-Save 70% on compute costs:
+Fargate Spot can reduce compute cost for interruption-tolerant tasks (see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/) for current rates):
 
 ```typescript
 const capacityProviderStrategy = [

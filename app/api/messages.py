@@ -7,7 +7,7 @@ Supports Programmatic Tool Calling (PTC) via Docker sandbox execution.
 import hashlib
 import json
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -45,6 +45,29 @@ from app.services.web_fetch_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _response_log_summary(response_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Metadata-only view of a Messages response, safe to log.
+
+    Never log the response body itself: content blocks can carry user data,
+    model output, and tool / code-execution results.
+    """
+    usage = response_dict.get("usage") or {}
+    container = response_dict.get("container") or {}
+    return {
+        "id": response_dict.get("id"),
+        "model": response_dict.get("model"),
+        "stop_reason": response_dict.get("stop_reason"),
+        "content_types": [
+            block.get("type")
+            for block in response_dict.get("content") or []
+            if isinstance(block, dict)
+        ],
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "container_id": container.get("id") if isinstance(container, dict) else None,
+    }
 
 
 def _get_effective_cache_ttl(
@@ -602,7 +625,7 @@ async def create_message(
                 if container_info:
                     response_dict["container"] = container_info.model_dump()
 
-                logger.debug(f"[PTC] Final response: {response_dict}")
+                logger.debug("[PTC] Final response: %s", _response_log_summary(response_dict))
                 _end_trace_spans()
                 return JSONResponse(content=response_dict)
 
@@ -700,7 +723,7 @@ async def create_message(
                 if container_info:
                     response_dict["container"] = container_info.model_dump()
 
-                logger.debug(f"[STANDALONE] Final response: {response_dict}")
+                logger.debug("[STANDALONE] Final response: %s", _response_log_summary(response_dict))
                 _end_trace_spans()
                 return JSONResponse(content=response_dict)
 
