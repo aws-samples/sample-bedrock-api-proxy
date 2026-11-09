@@ -186,7 +186,7 @@ def test_safe_url_strips_query_and_userinfo():
 
 @pytest.mark.asyncio
 async def test_fetch_error_message_redacts_query_string():
-    secret = "https://example.test/photo.png?Signature=SECRET123&Expires=999"
+    secret = "https://example.test/photo.png?Signature=SECRET123&Expires=999"  # nosec B105 - fake test fixture value, not a real credential
     with respx.mock(assert_all_called=True) as r:
         r.get(secret).mock(return_value=httpx.Response(404))
         with pytest.raises(ImageUrlFetchError) as exc:

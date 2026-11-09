@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 def test_openai_passthrough_provider_resolution_does_not_log_exception_secret(
     caplog, monkeypatch
 ):
-    secret = "sk-provider-secret-DO-NOT-LOG"
+    secret = "sk-provider-secret-DO-NOT-LOG"  # nosec B105 - fake test fixture value, not a real credential
 
     class FailingProviderManager:
         def get_provider(self, provider_id):
@@ -24,7 +24,7 @@ def test_openai_passthrough_provider_resolution_does_not_log_exception_secret(
 
 
 def test_openai_compat_constructor_does_not_print_secret_bearing_endpoint(capfd):
-    secret = "endpoint-secret-DO-NOT-PRINT"
+    secret = "endpoint-secret-DO-NOT-PRINT"  # nosec B105 - fake test fixture value, not a real credential
 
     with patch("app.services.openai_compat_service.OpenAI"):
         from app.services.openai_compat_service import OpenAICompatService
@@ -40,7 +40,7 @@ def test_openai_compat_constructor_does_not_print_secret_bearing_endpoint(capfd)
 
 
 def test_bedrock_service_constructor_does_not_print_secret_bearing_endpoint(capfd):
-    secret = "endpoint-secret-DO-NOT-PRINT"
+    secret = "endpoint-secret-DO-NOT-PRINT"  # nosec B105 - fake test fixture value, not a real credential
 
     with (
         patch("boto3.client", return_value=MagicMock()),
