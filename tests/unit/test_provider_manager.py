@@ -122,3 +122,33 @@ class TestProviderManagerMasking:
         fetched = manager.get_provider(created["provider_id"])
         assert "AKIAEXAMPLE" in fetched["masked_credentials"]
         assert "****" in fetched["masked_credentials"]
+
+
+class TestProviderCredentialEncryptionIsMandatory:
+    def test_create_without_secret_refuses_plaintext(self, mock_dynamodb):
+        from app.db.provider_manager import ProviderEncryptionNotConfigured
+
+        mgr = ProviderManager(dynamodb_resource=mock_dynamodb, encryption_secret=None)
+        with pytest.raises(ProviderEncryptionNotConfigured):
+            mgr.create_provider(
+                name="x", aws_region="us-east-1",
+                auth_type="bearer_token", credentials={"bearer_token": "tok"},
+            )
+        assert mgr.list_providers() == []
+
+    def test_stored_credentials_are_not_plaintext(self, manager, mock_dynamodb):
+        p = manager.create_provider(
+            name="x", aws_region="us-east-1",
+            auth_type="ak_sk",
+            credentials={"access_key_id": "AKIAEXAMPLE", "secret_access_key": "s3cr3t"},
+        )
+        raw = mock_dynamodb.Table("anthropic-proxy-providers").get_item(
+            Key={"provider_id": p["provider_id"]})["Item"]["encrypted_credentials"]
+        assert "s3cr3t" not in raw and "AKIAEXAMPLE" not in raw
+
+    def test_legacy_plaintext_row_still_readable(self, manager, mock_dynamodb):
+        mock_dynamodb.Table("anthropic-proxy-providers").put_item(Item={
+            "provider_id": "legacy",
+            "encrypted_credentials": '{"bearer_token": "old"}',
+        })
+        assert manager.get_decrypted_credentials("legacy") == {"bearer_token": "old"}

@@ -1,12 +1,20 @@
 """Provider manager for multi-Bedrock-account support."""
 import json
+import logging
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, Optional
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
+from cryptography.fernet import InvalidToken
 
 from app.keypool.encryption import KeyEncryption
+
+logger = logging.getLogger(__name__)
+
+
+class ProviderEncryptionNotConfigured(RuntimeError):
+    """Raised when provider credentials would be stored without encryption."""
 
 
 class ProviderManager:
@@ -16,21 +24,37 @@ class ProviderManager:
         self,
         dynamodb_resource,
         table_name: str = "anthropic-proxy-providers",
-        encryption_secret: str = "",
+        encryption_secret: Optional[str] = None,
     ):
         self.table = dynamodb_resource.Table(table_name)
         self.table_name = table_name
         self._encryption = KeyEncryption(encryption_secret) if encryption_secret else None
 
     def _encrypt_credentials(self, credentials: Dict[str, str]) -> str:
-        plaintext = json.dumps(credentials)
-        if self._encryption:
-            return self._encryption.encrypt(plaintext)
-        return plaintext
+        # Fail closed: never persist provider credentials (AWS keys, bearer
+        # tokens) in plaintext. Reading legacy plaintext rows still works.
+        if not self._encryption:
+            raise ProviderEncryptionNotConfigured(
+                "PROVIDER_KEY_ENCRYPTION_SECRET is not configured; refusing to store "
+                "provider credentials unencrypted"
+            )
+        return self._encryption.encrypt(json.dumps(credentials))
 
     def _decrypt_credentials(self, encrypted: str) -> Dict[str, str]:
         if self._encryption:
-            plaintext = self._encryption.decrypt(encrypted)
+            try:
+                plaintext = self._encryption.decrypt(encrypted)
+            except InvalidToken:
+                # Legacy row written before encryption was enforced: accept it
+                # so existing deployments keep working. Re-entering the
+                # provider's credentials re-writes them encrypted.
+                if not encrypted.lstrip().startswith("{"):
+                    raise
+                logger.warning(
+                    "[ProviderManager] provider credentials stored unencrypted; "
+                    "re-enter the provider's credentials to store them encrypted"
+                )
+                plaintext = encrypted
         else:
             plaintext = encrypted
         return json.loads(plaintext)

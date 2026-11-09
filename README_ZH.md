@@ -523,13 +523,33 @@ print(resp.output_text)
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "InvokeModels",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:InvokeModelWithResponseStream"
       ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ReadModelMetadata",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetFoundationModel", "bedrock:GetInferenceProfile"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ListModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:ListFoundationModels"],
       "Resource": "*"
     },
     {
@@ -547,6 +567,8 @@ print(resp.output_text)
   ]
 }
 ```
+
+生产环境请把 `Resource` 进一步收窄到实际使用的模型 ID / 推理配置。`arn:aws:bedrock:::foundation-model/*`（不带 Region）是 global 跨区域推理配置（`global.*`）必需的；地理范围配置（`us.*`、`eu.*` 等）需要目标 Region 的 foundation-model ARN，由 `bedrock:*::` 覆盖。`ListFoundationModels` 不支持资源级权限。
 
 ## 开发
 

@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.core.config import settings
 from app.db.dynamodb import DynamoDBClient, APIKeyManager
-from app.db.provider_manager import ProviderManager
+from app.db.provider_manager import ProviderEncryptionNotConfigured, ProviderManager
 from admin_portal.backend.schemas.provider import (
     ProviderCreate,
     ProviderUpdate,
@@ -47,7 +47,14 @@ def get_provider_manager() -> ProviderManager:
     return ProviderManager(
         dynamodb_resource=db.dynamodb,
         table_name=settings.dynamodb_providers_table,
-        encryption_secret=settings.provider_key_encryption_secret or "",
+        encryption_secret=settings.provider_key_encryption_secret,
+    )
+
+
+def _encryption_not_configured() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="PROVIDER_KEY_ENCRYPTION_SECRET not configured",
     )
 
 
@@ -81,13 +88,16 @@ async def get_provider(provider_id: str):
 @router.post("", response_model=ProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider(request: ProviderCreate):
     mgr = get_provider_manager()
-    item = mgr.create_provider(
-        name=request.name,
-        aws_region=request.aws_region,
-        auth_type=request.auth_type,
-        credentials=request.credentials,
-        endpoint_url=request.endpoint_url,
-    )
+    try:
+        item = mgr.create_provider(
+            name=request.name,
+            aws_region=request.aws_region,
+            auth_type=request.auth_type,
+            credentials=request.credentials,
+            endpoint_url=request.endpoint_url,
+        )
+    except ProviderEncryptionNotConfigured:
+        raise _encryption_not_configured()
     return ProviderResponse(**item)
 
 
@@ -100,7 +110,10 @@ async def update_provider(provider_id: str, request: ProviderUpdate):
 
     update_data = request.model_dump(exclude_none=True)
     if update_data:
-        mgr.update_provider(provider_id, **update_data)
+        try:
+            mgr.update_provider(provider_id, **update_data)
+        except ProviderEncryptionNotConfigured:
+            raise _encryption_not_configured()
 
     item = mgr.get_provider(provider_id)
     return ProviderResponse(**item)
