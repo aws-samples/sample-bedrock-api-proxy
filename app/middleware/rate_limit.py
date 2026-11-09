@@ -213,13 +213,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Rate limit exceeded
             retry_after = int(bucket.get_time_until_available(1)) + 1
 
-            # Identify the key by its owner and display name only; never log the
-            # key or any value derived from it.
+            # Never log the key, values derived from it, or fields of the key
+            # record; the caller already receives the 429.
             logger.warning(
-                "[RATE_LIMIT] Rate limit exceeded "
-                "(user_id=%s, key_name=%s, limit=%s, retry_after=%ss)",
-                api_key_info.get("user_id", "unknown"),
-                api_key_info.get("name", "unknown"),
+                "[RATE_LIMIT] Rate limit exceeded (path=%s, limit=%s, retry_after=%ss)",
+                request.url.path,
                 rate_limit,
                 retry_after,
             )

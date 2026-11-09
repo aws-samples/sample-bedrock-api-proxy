@@ -52,5 +52,5 @@ def test_rate_limit_log_contains_no_key_material(client, caplog, capsys):
     # No prefix of the key of any useful length may appear.
     for n in (8, 12, 20):
         assert API_KEY[:n] not in logged
-    assert "user_id=user-123" in logged
-    assert "key_name=ci-key" in logged
+    assert "user-123" not in logged and "ci-key" not in logged
+    assert "path=/v1/ping" in logged

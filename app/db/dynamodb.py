@@ -665,7 +665,7 @@ class APIKeyManager:
                     ":updated_at": int(time.time()),
                 },
             )
-            print(f"[APIKeyManager] Auto-reactivated key of user_id={item.get('user_id', 'unknown')} for new month {current_month}")
+            print(f"[APIKeyManager] Auto-reactivated a budget-deactivated key for new month {current_month}")
             return True
         except ClientError as e:
             print(f"[APIKeyManager] Error reactivating key: {e}")
@@ -2210,7 +2210,7 @@ class UsageStatsManager:
                     if api_key_manager and adjusted_cost > 0:
                         result = api_key_manager.increment_budget_used(api_key, adjusted_cost)
                         if result.get("budget_exceeded"):
-                            print(f"[UsageStatsManager] API key of user_id={(api_key_info or {}).get('user_id', 'unknown')} exceeded budget")
+                            print("[UsageStatsManager] An API key exceeded its budget and was deactivated")
             else:
                 # First run: set initial values
                 if self.update_stats(
@@ -2229,7 +2229,7 @@ class UsageStatsManager:
                     if api_key_manager and adjusted_cost > 0:
                         result = api_key_manager.increment_budget_used(api_key, adjusted_cost)
                         if result.get("budget_exceeded"):
-                            print(f"[UsageStatsManager] API key of user_id={(api_key_info or {}).get('user_id', 'unknown')} exceeded budget")
+                            print("[UsageStatsManager] An API key exceeded its budget and was deactivated")
 
         return count
 
