@@ -58,7 +58,25 @@ IPC_CODE_OUTPUT_END = "__PTC_END_OUTPUT__"
 
 # Runner script version - increment when runner logic changes
 # This helps detect and cleanup containers running old runner scripts
-RUNNER_SCRIPT_VERSION = 3  # v3: Fixed buffered I/O issue with dedicated reader thread
+RUNNER_SCRIPT_VERSION = 4  # v4: TOOLS_INFO decoded from a JSON string literal (booleans/null safe)
+
+# Static (non-interpolated) header of the generated sandbox runner script.
+_RUNNER_SCRIPT_HEADER = '''#!/usr/bin/env python3
+"""
+Sandbox Runner - Executes user code with tool call interception.
+Tools are executed externally (client-side), not in this container.
+"""
+
+import sys
+import os
+import json
+import asyncio
+import uuid
+import threading
+import time
+import select
+from typing import Any
+'''
 
 
 @dataclass
@@ -261,24 +279,12 @@ class PTCSandboxExecutor:
             tools: List of tool definitions (name, description, input_schema)
             loop_mode: Whether to run in loop mode for session reuse
         """
-        tools_json = json.dumps(tools)
+        # Embed tool definitions as a JSON *string literal* decoded at runtime.
+        # Raw JSON is not valid Python source (true/false/null would raise
+        # NameError) and untrusted text must never be spliced into code unquoted.
+        tools_literal = repr(json.dumps(tools))
 
-        return f'''#!/usr/bin/env python3
-"""
-Sandbox Runner - Executes user code with tool call interception.
-Tools are executed externally (client-side), not in this container.
-"""
-
-import sys
-import os
-import json
-import asyncio
-import uuid
-import threading
-import time
-import select
-from typing import Any
-
+        return _RUNNER_SCRIPT_HEADER + f'''
 # IPC Protocol markers
 IPC_TOOL_CALL_START = "{IPC_TOOL_CALL_START}"
 IPC_TOOL_CALL_END = "{IPC_TOOL_CALL_END}"
@@ -293,7 +299,7 @@ EXIT_SIGNAL = "__EXIT_SESSION__"
 READY_SIGNAL = "__READY__"
 
 # Tool definitions
-TOOLS_INFO = {tools_json}
+TOOLS_INFO = json.loads({tools_literal})
 
 # Shared state for result coordination using unbuffered I/O
 # This avoids issues with mixing select() and Python's buffered readline()
