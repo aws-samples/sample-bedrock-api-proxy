@@ -14,7 +14,7 @@ for (const launchType of ['fargate', 'ec2'] as const) {
   for (const enableCloudFront of [false, true]) {
     test(`${launchType}: ${enableCloudFront ? 'CloudFront + ALB' : 'ALB'} trust boundary`, (t) => {
       // Topology tests need no Docker context hashing/staging or image builds.
-      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('test/image'));
+      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('public.ecr.aws/docker/library/busybox:latest'));
       const app = new cdk.App();
       const config = {
         ...getConfig('dev'), launchType, enableCloudFront,
