@@ -22,7 +22,8 @@ export AWS_REGION=us-west-2
 npx cdk bootstrap
 
 # 3. Deploy all stacks (ARM64 recommended for better price-performance)
-./scripts/deploy.sh -e dev -r us-west-2 -p arm64
+# Real deployments: enable CloudFront (HTTPS + private ALB). prod has it on by default.
+ENABLE_CLOUDFRONT=true ./scripts/deploy.sh -e dev -r us-west-2 -p arm64
 
 # 4. Create an API key (with default service tier)
 ./scripts/create-api-key.sh -e dev -u admin@example.com -n "Dev Key"
@@ -30,9 +31,11 @@ npx cdk bootstrap
 # Or create with flex tier (for Qwen, DeepSeek, etc. - NOT for Claude)
 ./scripts/create-api-key.sh -e dev -u admin@example.com -n "Flex Key" -t flex
 
-# 5. Test deployment
-curl http://YOUR_ALB_URL/health
+# 5. Test deployment (CloudFront HTTPS URL from the deploy output)
+curl https://YOUR_CLOUDFRONT_DOMAIN/health
 ```
+
+> **Without CloudFront** (`enableCloudFront: false`) the ALB is internet-facing and serves **plain HTTP**: API keys and prompts would travel unencrypted. Use that mode only for short-lived testing and never send real API keys over it.
 
 **Time:** ~15-20 minutes for initial deployment
 
@@ -40,9 +43,9 @@ curl http://YOUR_ALB_URL/health
 
 Choose your target architecture:
 
-- **`-p arm64`** (Recommended): AWS Graviton2 processors
-  - 20% cheaper than x86
-  - 40% better price-performance
+- **`-p arm64`** (Recommended): AWS Graviton processors
+  - Fargate ARM64 is priced lower than x86 per vCPU-hour; see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/) for current rates in your region
+  - AWS publishes price-performance comparisons on the [AWS Graviton page](https://aws.amazon.com/ec2/graviton/); benchmark your own workload
   - Best for most workloads
 
 - **`-p amd64`**: Traditional x86_64 architecture
@@ -198,7 +201,9 @@ The deployment script shows:
 
 ```
 Access URLs:
-  ALB: http://anthropic-proxy-dev-alb-123456789.us-west-2.elb.amazonaws.com
+  API Proxy (HTTPS): https://d1234567890.cloudfront.net
+  Admin Portal (HTTPS): https://d1234567890.cloudfront.net/admin/
+  ALB (internal, VPC-only; reachable through CloudFront): http://internal-anthropic-proxy-dev-ialb-123456789.us-west-2.elb.amazonaws.com
 
 Master API Key Secret:
   Secret Name: anthropic-proxy-dev-master-api-key
@@ -215,7 +220,7 @@ Next Steps:
 ### 1. Health Check
 
 ```bash
-ENDPOINT="http://YOUR_ALB_URL"
+ENDPOINT="https://YOUR_CLOUDFRONT_DOMAIN"   # never send API keys to a plain-HTTP endpoint
 curl "${ENDPOINT}/health"
 ```
 
@@ -393,10 +398,10 @@ After deployment:
    - ALB 5xx errors
    - High CPU/memory utilization
 
-2. **Configure custom domain:**
-   - Create ACM certificate
-   - Add HTTPS listener to ALB
-   - Add Route53 DNS record
+2. **Configure a custom domain (optional):**
+   - Create an ACM certificate in us-east-1
+   - Set `cloudFrontDomainName` + `cloudFrontCertificateArn` and redeploy
+   - Add a Route53 alias record to the CloudFront distribution
 
 3. **Set up CI/CD:**
    - Use GitHub Actions or CodePipeline

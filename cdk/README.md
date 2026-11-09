@@ -309,10 +309,11 @@ The admin portal provides a web-based management interface for the API proxy.
 
 After deployment, access the admin portal at `https://<CloudFront-domain>/admin/` (stack output `AdminPortalHTTPSURL`). With CloudFront enabled the ALB is internal, so its DNS name does not work from outside the VPC.
 
-Only when CloudFront is disabled (testing), use:
+Only when CloudFront is disabled (short-lived testing), use:
 ```
 http://<ALB-DNS>/admin/
 ```
+> ⚠️ This is plain HTTP: Cognito passwords and JWTs would travel unencrypted. Do not use real credentials here; enable CloudFront for any real use.
 
 Get the ALB DNS from deployment output:
 ```bash
