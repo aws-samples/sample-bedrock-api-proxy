@@ -47,19 +47,34 @@ export class NetworkStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // Allow HTTP from anywhere
-    this.albSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(80),
-      'Allow HTTP from anywhere'
-    );
+    if (config.enableCloudFront) {
+      // The ALB is internal and fronted by a CloudFront VPC origin. Only accept
+      // traffic from CloudFront's origin-facing ranges (AWS-managed prefix list),
+      // on the single HTTP listener port. Nothing else may reach the ALB.
+      // NOTE: this prefix list carries a large rule weight; keep it to ONE rule
+      // per security group (see "AWS-managed prefix list weight" in the VPC docs).
+      const cloudFrontOriginFacing = ec2.PrefixList.fromLookup(this, 'CloudFrontOriginFacing', {
+        prefixListName: 'com.amazonaws.global.cloudfront.origin-facing',
+      });
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.prefixList(cloudFrontOriginFacing.prefixListId),
+        ec2.Port.tcp(80),
+        'Allow HTTP from CloudFront origin-facing servers (VPC origin) only'
+      );
+    } else {
+      // Direct ALB mode (testing only): internet-facing plain HTTP.
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.anyIpv4(),
+        ec2.Port.tcp(80),
+        'Allow HTTP from anywhere'
+      );
 
-    // Allow HTTPS from anywhere
-    this.albSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(443),
-      'Allow HTTPS from anywhere'
-    );
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.anyIpv4(),
+        ec2.Port.tcp(443),
+        'Allow HTTPS from anywhere'
+      );
+    }
 
     // Security Group for ECS Tasks
     this.ecsSecurityGroup = new ec2.SecurityGroup(this, 'ECSSecurityGroup', {

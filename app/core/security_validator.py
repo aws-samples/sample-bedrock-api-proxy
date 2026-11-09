@@ -74,7 +74,7 @@ def validate_security_config() -> list[str]:
     if settings.multi_provider_enabled and not settings.provider_key_encryption_secret:
         msg = (
             "MULTI_PROVIDER_ENABLED=True but PROVIDER_KEY_ENCRYPTION_SECRET is not set. "
-            "Provider API keys will not be encrypted."
+            "Provider credentials cannot be stored and multi-provider features are disabled."
         )
         logger.warning(msg)
         warnings.append(msg)

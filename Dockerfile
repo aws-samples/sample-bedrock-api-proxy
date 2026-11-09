@@ -1,11 +1,14 @@
 # Multi-stage Dockerfile for Anthropic-Bedrock API Proxy
-# Using official uv image for faster dependency management
+# Base images come from ECR Public (Docker Official Images mirror); uv is pinned
 
 # Stage 1: Builder
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm AS builder
 
 # Set working directory
 WORKDIR /build
+
+# uv is pinned and installed from PyPI; base image comes from ECR Public
+RUN pip install --no-cache-dir "uv==0.12.6"
 
 # Copy dependency files and source code (needed for package build)
 COPY pyproject.toml uv.lock README.md ./
@@ -26,8 +29,8 @@ ENV UV_HTTP_TIMEOUT=180 \
     UV_CONCURRENT_DOWNLOADS=4
 RUN uv sync --frozen --no-dev
 
-# Stage 2: Runtime
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# Stage 2: Runtime (uv is not needed at runtime)
+FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
 # Set working directory
 WORKDIR /app

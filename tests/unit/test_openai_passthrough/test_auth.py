@@ -120,7 +120,7 @@ async def test_invalid_api_key_does_not_leak_to_log(monkeypatch, capsys):
     monkeypatch.setattr("app.core.config.settings.master_api_key", "")
     monkeypatch.setattr("app.core.config.settings.api_key_header", "x-api-key")
 
-    secret = "sk-deadbeef-DO-NOT-LEAK-1234567890abcdef"
+    secret = "sk-deadbeef-DO-NOT-LEAK-1234567890abcdef"  # nosec B105 - fake test fixture value, not a real credential
 
     request = MagicMock(spec=Request)
     request.url.path = "/test"

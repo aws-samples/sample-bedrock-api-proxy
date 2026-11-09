@@ -38,7 +38,7 @@
 **核心优势：**
 - 🔄 **零代码迁移** - 完全兼容 Anthropic API，无需修改现有代码
 - 🚀 **开箱即用** - 支持流式/非流式响应、工具调用、多模态等所有高级特性
-- 🤖 **Programmatic Tool Calling** - 业界首个在 Bedrock 上实现 Anthropic 兼容 PTC API 的代理服务
+- 🤖 **Programmatic Tool Calling** - 在 Bedrock 上实现 Anthropic 兼容的 PTC API
 - 🔍 **Dynamic Web Search** - 支持 `web_search_20250305` / `web_search_20260209`，Claude 可动态编写代码过滤搜索结果
 - 🌐 **Web Fetch** - 支持 `web_fetch_20250910` / `web_fetch_20260209`，无需额外 API Key 即可抓取网页与 PDF
 - 🧠 **GPT 模型代理** - OpenAI Responses API 与 Chat Completions API 透传，支持代理端 web search
@@ -61,7 +61,7 @@
 ### 高级功能
 - **Programmatic Tool Calling (PTC)**：Claude 在 Docker Sandbox 中生成并执行 Python 代码调用工具。支持多轮执行、`asyncio.gather` 并行调用、会话复用。
 - **Web 搜索**：代理端 `web_search_20250305`/`web_search_20260209`，支持 Tavily，Brave 或Bedrock AgentCore Gateway WebSearch。域名过滤、搜索次数限制、用户位置。动态过滤版本需要 Docker。
-- **[AgentCore Search MCP Server](agentcore-search-mcp/README_ZH.md)**：独立的 MCP server（[PyPI](https://pypi.org/project/agentcore-search-mcp/)：`uvx agentcore-search-mcp`），把 Amazon Bedrock AgentCore Gateway WebSearch 暴露给任意 MCP 客户端（Claude Code、Codex、Cursor）——本地 stdio 桥，补上 gateway 要求的 SigV4 签名。与代理本体相互独立，自带 gateway 一键部署脚本。
+- **[AgentCore Search MCP Server](agentcore-search-mcp/README_ZH.md)**：独立的 MCP server（[PyPI](https://pypi.org/project/agentcore-search-mcp/)：`uvx agentcore-search-mcp@0.1.0`，固定到已发布版本，升级时显式修改），把 Amazon Bedrock AgentCore Gateway WebSearch 暴露给任意 MCP 客户端（Claude Code、Codex、Cursor）——本地 stdio 桥，补上 gateway 要求的 SigV4 签名。与代理本体相互独立，自带 gateway 一键部署脚本。
 - **Web 抓取**：代理端 `web_fetch_20250910`/`web_fetch_20260209`，使用 httpx（无需 API Key）。支持 PDF。动态过滤版本需要 Docker。
 - **提示词缓存 TTL**：扩展 `cache_control` 支持 1 小时 TTL。三级优先级：API Key → 请求 → 环境变量默认值。
 - **Beta Header 映射**：自动将 Anthropic beta headers 映射到 Bedrock beta headers。
@@ -178,7 +178,7 @@ MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-east-2.api.aws/openai/v1 \
 # 安装（model-mappings/ 子模块保存默认模型映射的离线快照）
 git clone --recurse-submodules https://github.com/xiehust/sample-bedrock-api-proxy.git
 cd sample-bedrock-api-proxy   # 已经 clone 过？执行：git submodule update --init
-pip install uv && uv sync
+pip install "uv==0.12.6" && uv sync --locked   # 固定 uv 版本；--locked 严格按 uv.lock 安装
 cp env.example .env  # 配置环境变量
 
 # 初始化 DynamoDB 表并创建 API Key
@@ -523,13 +523,33 @@ print(resp.output_text)
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "InvokeModels",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:InvokeModelWithResponseStream"
       ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ReadModelMetadata",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetFoundationModel", "bedrock:GetInferenceProfile"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ListModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:ListFoundationModels"],
       "Resource": "*"
     },
     {
@@ -547,6 +567,8 @@ print(resp.output_text)
   ]
 }
 ```
+
+生产环境请把 `Resource` 进一步收窄到实际使用的模型 ID / 推理配置。`arn:aws:bedrock:::foundation-model/*`（不带 Region）是 global 跨区域推理配置（`global.*`）必需的；地理范围配置（`us.*`、`eu.*` 等）需要目标 Region 的 foundation-model ARN，由 `bedrock:*::` 覆盖。`ListFoundationModels` 不支持资源级权限。
 
 ## 开发
 

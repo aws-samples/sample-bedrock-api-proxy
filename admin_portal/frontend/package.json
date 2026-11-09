@@ -35,8 +35,8 @@
     "vite": "^5.4.11"
   },
   "overrides": {
-    "minimatch": ">=3.1.4",
-    "fast-xml-parser": ">=4.5.4",
-    "rollup": ">=4.59.0"
+    "minimatch": "10.2.4",
+    "fast-xml-parser": "5.5.9",
+    "rollup": "4.60.0"
   }
 }

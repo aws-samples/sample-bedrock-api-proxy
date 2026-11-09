@@ -404,7 +404,7 @@ The code can call the following async tool functions:
 {tools_doc}
 
 Important:
-- All tool calls must use `await`, e.g., `result = await query_database(sql="SELECT * FROM users")`
+- All tool calls must use `await`, e.g., `result = await get_weather(city="Paris")`
 - Use `print()` to output results you want to see
 - Code runs in an isolated environment without network access
 - Only the print output will be returned

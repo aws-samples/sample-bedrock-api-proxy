@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import socket
 import time
 
 import httpx
@@ -27,6 +28,29 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 GIF_BYTES = b"GIF89a" + b"\x00" * 16
 WEBP_BYTES = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"VP8 " + b"\x00" * 8
+
+PUBLIC_TEST_IP = "93.184.216.34"
+_real_getaddrinfo = socket.getaddrinfo
+
+
+def _fake_getaddrinfo(host, *args, **kwargs):
+    """Resolve *.test fixture hosts to a public IP; everything else for real.
+
+    Literal IPs (e.g. 10.0.0.5, 169.254.169.254) resolve to themselves without
+    network access, so SSRF tests stay offline.
+    """
+    if isinstance(host, bytes):
+        host = host.decode()
+    if host.endswith(".test"):
+        if host.startswith("internal."):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.7", 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_TEST_IP, 0))]
+    return _real_getaddrinfo(host, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _offline_dns(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
 
 
 # --- fetch_image_url --------------------------------------------------------
@@ -162,7 +186,7 @@ def test_safe_url_strips_query_and_userinfo():
 
 @pytest.mark.asyncio
 async def test_fetch_error_message_redacts_query_string():
-    secret = "https://example.test/photo.png?Signature=SECRET123&Expires=999"
+    secret = "https://example.test/photo.png?Signature=SECRET123&Expires=999"  # nosec B105 - fake test fixture value, not a real credential
     with respx.mock(assert_all_called=True) as r:
         r.get(secret).mock(return_value=httpx.Response(404))
         with pytest.raises(ImageUrlFetchError) as exc:
@@ -363,3 +387,72 @@ async def test_resolve_propagates_first_error(monkeypatch):
         r.get("https://example.test/bad.png").mock(return_value=httpx.Response(500))
         with pytest.raises(ImageUrlFetchError, match="status 500"):
             await resolve_image_urls([msg])
+
+
+# --- SSRF protection ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://169.254.170.2/v2/credentials",
+        "http://127.0.0.1:8000/admin",
+        "http://10.0.0.5/x.png",
+        "http://[::1]/x.png",
+        "http://localhost/x.png",
+        "https://internal.example.test/x.png",  # hostname resolving to 10.0.0.7
+    ],
+)
+async def test_fetch_blocks_private_and_metadata_destinations(url):
+    with respx.mock(assert_all_called=False) as r:
+        route = r.get(url).mock(return_value=httpx.Response(200, content=PNG_BYTES))
+        with pytest.raises(ImageUrlFetchError, match="not allowed"):
+            await fetch_image_url(url, timeout=5.0, max_bytes=1_000_000)
+        assert not route.called, "no request may be sent to a blocked destination"
+
+
+@pytest.mark.asyncio
+async def test_fetch_blocks_redirect_to_metadata():
+    with respx.mock(assert_all_called=False) as r:
+        r.get("https://example.test/redirect").mock(
+            return_value=httpx.Response(
+                302, headers={"location": "http://169.254.169.254/latest/meta-data/"}
+            )
+        )
+        metadata = r.get("http://169.254.169.254/latest/meta-data/").mock(
+            return_value=httpx.Response(200, content=PNG_BYTES)
+        )
+        with pytest.raises(ImageUrlFetchError, match="not allowed"):
+            await fetch_image_url(
+                "https://example.test/redirect", timeout=5.0, max_bytes=1_000_000
+            )
+        assert not metadata.called
+
+
+@pytest.mark.asyncio
+async def test_blocked_error_does_not_leak_resolved_ip():
+    with pytest.raises(ImageUrlFetchError) as exc:
+        await fetch_image_url(
+            "https://internal.example.test/x.png", timeout=5.0, max_bytes=1_000_000
+        )
+    assert "10.0.0.7" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_private_destinations_allowed_when_opted_in(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "image_url_fetch_allow_private_networks", True)
+    with respx.mock(assert_all_called=True) as r:
+        r.get("http://10.0.0.5/x.png").mock(
+            return_value=httpx.Response(
+                200, content=PNG_BYTES, headers={"content-type": "image/png"}
+            )
+        )
+        data, media_type = await fetch_image_url(
+            "http://10.0.0.5/x.png", timeout=5.0, max_bytes=1_000_000
+        )
+    assert data == PNG_BYTES
+    assert media_type == "image/png"

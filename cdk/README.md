@@ -95,7 +95,9 @@ cd cdk
 npm install
 ```
 
-**Note:** For production, you should add HTTPS by configuring an SSL certificate on the ALB.
+**Note:** For any real deployment, enable CloudFront (`enableCloudFront: true`, the `prod` default, or `ENABLE_CLOUDFRONT=true`). Clients then connect over HTTPS, the ALB is **internal** (private subnets, no internet-facing endpoint), and CloudFront reaches it through a [CloudFront VPC origin](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-vpc-origins.html), so origin traffic stays on the AWS network. With CloudFront disabled the ALB is internet-facing and serves plain HTTP: use that mode for testing only (`cdk synth` prints a warning).
+
+**Migrating an existing CloudFront deployment:** the first deploy after this change creates a new internal ALB (`anthropic-proxy-<env>-ialb`) with new target groups, moves the ECS services to them, repoints CloudFront, and then deletes the old internet-facing ALB. The CloudFront URL does not change; the `ALBDNSName` output does, and the ALB is no longer reachable directly. Deploy during a low-traffic window, because the admin portal can be briefly unavailable while its service moves.
 
 ## Configuration
 
@@ -205,8 +207,8 @@ Creates VPC infrastructure:
 
 - **VPC CIDR:** `10.0.0.0/16` (dev), `10.1.0.0/16` (prod)
 - **Subnets:**
-  - Public subnets (for ALB)
-  - Private subnets with NAT (for ECS tasks)
+  - Public subnets (NAT gateways; ALB only when CloudFront is disabled)
+  - Private subnets with NAT (ECS tasks; internal ALB when CloudFront is enabled)
 - **NAT Gateways:** 1 (dev), 3 (prod)
 - **VPC Endpoints (prod only):**
   - S3 Gateway Endpoint (free)
@@ -214,7 +216,8 @@ Creates VPC infrastructure:
   - ECR, CloudWatch Logs, Bedrock Runtime (interface endpoints)
 
 **Security Groups:**
-- ALB SG: Allows 80, 443 from internet
+- ALB SG (CloudFront enabled): allows port 80 only from the CloudFront origin-facing managed prefix list (`com.amazonaws.global.cloudfront.origin-facing`)
+- ALB SG (CloudFront disabled, testing only): allows 80, 443 from the internet
 - ECS SG: Allows traffic from ALB only
 
 ### 3. ECS Stack
@@ -295,7 +298,7 @@ Creates the admin portal as a separate Fargate service:
 - Model pricing configuration
 
 **Access:**
-- URL: `http://<ALB-DNS>/admin/`
+- URL: `https://<CloudFront-domain>/admin/` (output `AdminPortalHTTPSURL`) with CloudFront enabled; `http://<ALB-DNS>/admin/` only when CloudFront is disabled
 - First login: Create user in Cognito console
 
 ## Admin Portal
@@ -304,10 +307,13 @@ The admin portal provides a web-based management interface for the API proxy.
 
 ### Accessing the Admin Portal
 
-After deployment, access the admin portal at:
+After deployment, access the admin portal at `https://<CloudFront-domain>/admin/` (stack output `AdminPortalHTTPSURL`). With CloudFront enabled the ALB is internal, so its DNS name does not work from outside the VPC.
+
+Only when CloudFront is disabled (short-lived testing), use:
 ```
 http://<ALB-DNS>/admin/
 ```
+> ⚠️ This is plain HTTP: Cognito passwords and JWTs would travel unencrypted. Do not use real credentials here; enable CloudFront for any real use.
 
 Get the ALB DNS from deployment output:
 ```bash
@@ -449,7 +455,7 @@ View metrics in CloudWatch Console:
 
 ### Development Environment
 
-**Estimated monthly cost:** ~$50-100
+**Cost drivers** (no fixed estimate: costs depend on region, traffic and Bedrock usage; model your own scenario with the [AWS Pricing Calculator](https://calculator.aws/)):
 
 - ECS Fargate: 1 task × 0.5 vCPU × 1GB RAM
 - ALB: 1 load balancer + LCU usage
@@ -459,7 +465,7 @@ View metrics in CloudWatch Console:
 
 ### Production Environment
 
-**Estimated monthly cost:** ~$200-500 (base) + usage
+**Cost drivers** (estimate with the [AWS Pricing Calculator](https://calculator.aws/) for your region, task count and traffic; Bedrock model usage is billed separately):
 
 - ECS Fargate: 2-10 tasks (auto-scaling)
 - ALB: Higher LCU usage
@@ -472,8 +478,8 @@ View metrics in CloudWatch Console:
 1. Use VPC endpoints to avoid NAT gateway charges for AWS API calls
 2. Enable DynamoDB auto-scaling for predictable traffic
 3. Review CloudWatch log retention (7 days dev, 30 days prod)
-4. Use Fargate Spot for non-critical workloads (70% discount)
-5. Consider using ARM64 (Graviton2) for 20% cost savings
+4. Use Fargate Spot for interruption-tolerant workloads; see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/) for current Spot rates in your region
+5. Consider ARM64 (Graviton) tasks, which are priced lower than x86 per vCPU-hour; see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/)
 
 ## Troubleshooting
 
@@ -572,7 +578,7 @@ ALB returns 504 if:
 
 ### Using Fargate Spot
 
-Save 70% on compute costs:
+Fargate Spot can reduce compute cost for interruption-tolerant tasks (see [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/) for current rates):
 
 ```typescript
 const capacityProviderStrategy = [

@@ -217,7 +217,7 @@ def test_url_image_source_404_returns_400_invalid_request():
 
 def test_url_image_source_error_message_does_not_leak_query_string():
     """Presigned-token-style query strings must not echo back to the client."""
-    secret = "SECRETTOKEN12345"
+    secret = "SECRETTOKEN12345"  # nosec B105 - fake test fixture value, not a real credential
     bad_url = f"{NOT_FOUND_URL}?Signature={secret}&Expires=999"
     payload = _build_request(
         {"type": "image", "source": {"type": "url", "url": bad_url}}

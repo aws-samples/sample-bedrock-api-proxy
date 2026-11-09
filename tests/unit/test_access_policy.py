@@ -287,7 +287,7 @@ def test_exact_serialized_size_boundary():
 
 
 def test_denial_does_not_include_key_or_corrupt_payload(capsys, caplog):
-    secret = "sk-do-not-log-this-secret"
+    secret = "sk-do-not-log-this-secret"  # nosec B105 - fake test fixture value, not a real credential
     with pytest.raises(AccessPolicyDenied) as exc:
         policy_from_key_info({"api_key": secret, "access_policy": secret})
     assert secret not in str(exc.value)

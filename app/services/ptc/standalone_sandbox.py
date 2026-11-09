@@ -46,6 +46,23 @@ IPC_RESULT_END = "__STANDALONE_END_RESULT__"
 # Standalone runner script version
 STANDALONE_RUNNER_VERSION = 1
 
+# Static (non-interpolated) header of the generated standalone runner script.
+_STANDALONE_RUNNER_HEADER = '''#!/usr/bin/env python3
+"""
+Standalone Sandbox Runner - Executes bash commands and file operations.
+All execution is server-side (no external tool calls).
+"""
+
+import sys
+import os
+import json
+import subprocess
+import time
+import select
+import difflib
+from typing import Any, Optional, List
+'''
+
 
 @dataclass
 class StandaloneSandboxConfig(SandboxConfig):
@@ -140,21 +157,7 @@ class StandaloneSandboxExecutor:
 
     def _get_standalone_runner_script(self) -> str:
         """Generate the runner script for standalone code execution."""
-        return f'''#!/usr/bin/env python3
-"""
-Standalone Sandbox Runner - Executes bash commands and file operations.
-All execution is server-side (no external tool calls).
-"""
-
-import sys
-import os
-import json
-import subprocess
-import time
-import select
-import difflib
-from typing import Any, Optional, List
-
+        return _STANDALONE_RUNNER_HEADER + f'''
 # IPC Protocol markers
 IPC_COMMAND_START = "{IPC_COMMAND_START}"
 IPC_COMMAND_END = "{IPC_COMMAND_END}"

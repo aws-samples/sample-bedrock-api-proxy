@@ -13,18 +13,21 @@ CloudFront (*.cloudfront.net)
     │  - Attaches X-CloudFront-Secret header
     │  - HSTS security response header
     │
-    ▼ HTTP (80, internal)
-ALB (existing)
-    │  - Validates X-CloudFront-Secret
-    │  - Rejects direct access (returns 403)
+    ▼ HTTP (80) over a CloudFront VPC origin — AWS network only, never the public internet
+Internal ALB (private subnets, no internet-facing endpoint)
+    │  - Security group: CloudFront origin-facing prefix list only
+    │  - Validates X-CloudFront-Secret (defense in depth)
+    │  - Rejects requests without it (returns 403)
     │
     ▼ HTTP (8000)
-ECS Tasks (unchanged)
+ECS Tasks (private subnets)
 ```
+
+TLS terminates at CloudFront. The CloudFront → ALB hop uses HTTP, but over a [CloudFront VPC origin](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-vpc-origins.html): traffic stays on the AWS network and the ALB has no public endpoint. If your compliance requirements demand TLS on that hop as well, add an HTTPS listener with an ACM certificate for a domain you own and set the origin protocol policy to HTTPS-only.
 
 ## Enabling CloudFront
 
-CloudFront is **disabled by default** for both `dev` and `prod` environments. Enable it via environment variable:
+CloudFront is **enabled by default for `prod`** and disabled for `dev`. Without CloudFront the ALB is internet-facing and serves **plain HTTP — use that mode for short-lived testing only and never send real API keys over it**. Enable CloudFront explicitly via environment variable:
 
 ```bash
 # Enable CloudFront HTTPS distribution
@@ -50,8 +53,9 @@ export ANTHROPIC_API_KEY=sk-xxxx
 
 | Mechanism | Description |
 |-----------|-------------|
-| **HTTPS Encryption** | End-to-end TLS encryption from client to CloudFront, protecting API keys and request data |
-| **ALB Access Control** | ALB only accepts requests with the `X-CloudFront-Secret` header, rejects direct access |
+| **HTTPS Encryption** | TLS from the client to CloudFront, protecting API keys and request data on the public internet. The CloudFront → ALB hop is HTTP over a private VPC origin (see Architecture) |
+| **Private ALB** | The ALB is internal (private subnets); its security group admits only the CloudFront origin-facing managed prefix list |
+| **ALB Access Control** | ALB only accepts requests with the `X-CloudFront-Secret` header, rejects anything else (defense in depth) |
 | **HSTS** | Forces browsers to use HTTPS (`Strict-Transport-Security: max-age=31536000`) |
 | **Auto-Generated Secret** | Secrets Manager automatically generates a 32-character random validation key |
 
@@ -68,7 +72,7 @@ export ANTHROPIC_API_KEY=sk-xxxx
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enableCloudFront` | boolean | `false` | Enable CloudFront HTTPS distribution |
+| `enableCloudFront` | boolean | `true` (prod), `false` (dev) | Enable CloudFront HTTPS + private ALB via VPC origin. `false` = public plain-HTTP ALB, testing only |
 | `cloudFrontOriginReadTimeout` | number | `60` | Origin read timeout (seconds), default max 60s, up to 180s with quota increase |
 
 ## Disabling CloudFront

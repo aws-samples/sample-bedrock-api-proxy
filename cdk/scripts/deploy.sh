@@ -494,7 +494,7 @@ else
         if [[ -n "$ADMIN_HTTPS_URL" && "$ADMIN_HTTPS_URL" != "None" ]]; then
             echo -e "  Admin Portal (HTTPS): ${ADMIN_HTTPS_URL}"
         fi
-        echo -e "  ALB (internal HTTP): http://${ALB_DNS}"
+        echo -e "  ALB (internal, VPC-only; reachable through CloudFront): http://${ALB_DNS}"
     else
         echo -e "  API Proxy: http://${ALB_DNS}"
         if [[ "$ADMIN_PORTAL_URL" != "N/A" ]]; then

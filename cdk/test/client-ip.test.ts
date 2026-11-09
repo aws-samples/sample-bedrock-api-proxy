@@ -14,7 +14,7 @@ for (const launchType of ['fargate', 'ec2'] as const) {
   for (const enableCloudFront of [false, true]) {
     test(`${launchType}: ${enableCloudFront ? 'CloudFront + ALB' : 'ALB'} trust boundary`, (t) => {
       // Topology tests need no Docker context hashing/staging or image builds.
-      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('test/image'));
+      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('public.ecr.aws/docker/library/busybox:latest'));
       const app = new cdk.App();
       const config = {
         ...getConfig('dev'), launchType, enableCloudFront,
@@ -49,7 +49,10 @@ for (const launchType of ['fargate', 'ec2'] as const) {
       const attributes = lbs[0].Properties.LoadBalancerAttributes;
       assert(attributes.some((a: any) => a.Key === 'routing.http.xff_header_processing.mode' && a.Value === 'append'));
       assert(attributes.some((a: any) => a.Key === 'routing.http.xff_client_port.enabled' && a.Value === 'false'));
-      assert.deepEqual(lbs[0].Properties.Subnets, stack.resolve(network.vpc.publicSubnets.map(s => s.subnetId)));
+      // CloudFront mode: internal ALB in private subnets behind a VPC origin.
+      const albSubnets = enableCloudFront ? network.vpc.privateSubnets : network.vpc.publicSubnets;
+      assert.deepEqual(lbs[0].Properties.Subnets, stack.resolve(albSubnets.map(s => s.subnetId)));
+      assert.equal(lbs[0].Properties.Scheme, enableCloudFront ? 'internal' : 'internet-facing');
 
       const tasks = Object.values(template.findResources('AWS::ECS::TaskDefinition'));
       const containers = tasks.flatMap(task => task.Properties.ContainerDefinitions);
@@ -58,8 +61,28 @@ for (const launchType of ['fargate', 'ec2'] as const) {
       const vars = Object.fromEntries(proxy.Environment.map((v: any) => [v.Name, v.Value]));
       assert.equal(vars.CLIENT_IP_TRUSTED_PROXY_HOPS, enableCloudFront ? '2' : '1');
       assert.deepEqual(vars.CLIENT_IP_TRUSTED_PROXY_CIDRS,
-        stack.resolve(network.vpc.publicSubnets.map(s => s.ipv4CidrBlock).join(',')));
+        stack.resolve(albSubnets.map(s => s.ipv4CidrBlock).join(',')));
       assert.equal(proxy.Command, undefined, 'do not override the protected Docker CMD');
+
+      // Provider credentials are encrypted at rest: proxy and admin containers
+      // both receive the encryption key from Secrets Manager.
+      const withEncKey = containers.filter((c: any) =>
+        (c.Secrets ?? []).some((s: any) => s.Name === 'PROVIDER_KEY_ENCRYPTION_SECRET'));
+      assert.equal(withEncKey.length, 2, 'proxy + admin get PROVIDER_KEY_ENCRYPTION_SECRET');
+
+      // Bedrock invoke permissions are scoped by resource type, never '*'.
+      // CDK may split large role policies into overflow managed policies.
+      const statements = [
+        ...Object.values(template.findResources('AWS::IAM::Policy')),
+        ...Object.values(template.findResources('AWS::IAM::ManagedPolicy')),
+      ].flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+      const invoke = statements.filter((st: any) =>
+        ([] as string[]).concat(st.Action).some(a => a.startsWith('bedrock:Invoke')));
+      assert(invoke.length >= 1);
+      for (const st of invoke) {
+        assert(Array.isArray(st.Resource), 'invoke resources must be an explicit list');
+        assert(!st.Resource.includes('*'), 'no wildcard resource for bedrock:Invoke*');
+      }
 
       const listeners = Object.values(template.findResources('AWS::ElasticLoadBalancingV2::Listener'));
       assert.equal(listeners.length, 1, 'no alternate unprotected listener');
@@ -68,7 +91,14 @@ for (const launchType of ['fargate', 'ec2'] as const) {
         assert.equal(listeners[0].Properties.DefaultActions[0].Type, 'fixed-response');
         assert.equal(listeners[0].Properties.DefaultActions[0].FixedResponseConfig.StatusCode, '403');
         const distributions = Object.values(template.findResources('AWS::CloudFront::Distribution'));
-        const header = distributions[0].Properties.DistributionConfig.Origins[0].OriginCustomHeaders
+        const origin = distributions[0].Properties.DistributionConfig.Origins[0];
+        assert(origin.VpcOriginConfig, 'CloudFront must reach the ALB through a VPC origin');
+        assert.equal(origin.CustomOriginConfig, undefined, 'no public custom (HTTP) origin');
+        const vpcOrigins = Object.values(template.findResources('AWS::CloudFront::VpcOrigin'));
+        assert.equal(vpcOrigins.length, 1);
+        assert.deepEqual(vpcOrigins[0].Properties.VpcOriginEndpointConfig.Arn,
+          stack.resolve(stack.alb.loadBalancerArn));
+        const header = origin.OriginCustomHeaders
           .find((h: any) => h.HeaderName === 'X-CloudFront-Secret');
         assert(header);
         assert.equal(rules.length, 3, 'API and both admin routes must all be secret protected');
@@ -99,6 +129,23 @@ for (const launchType of ['fargate', 'ec2'] as const) {
         assert.equal(rule.CidrIp, undefined);
         assert.equal(rule.CidrIpv6, undefined);
       }
+      // ALB ingress: CloudFront mode admits only the CloudFront origin-facing
+      // prefix list on the listener port; never 0.0.0.0/0.
+      const albIngress = [
+        ...(groups[albId].Properties.SecurityGroupIngress ?? []),
+        ...Object.values(net.findResources('AWS::EC2::SecurityGroupIngress'))
+          .map(r => r.Properties).filter(p => JSON.stringify(p.GroupId).includes(albId)),
+      ];
+      if (enableCloudFront) {
+        assert.equal(albIngress.length, 1, 'exactly one ALB ingress rule in CloudFront mode');
+        assert(albIngress[0].SourcePrefixListId, 'ALB ingress must come from the CloudFront prefix list');
+        assert.equal(albIngress[0].CidrIp, undefined);
+        assert.equal(albIngress[0].FromPort, 80);
+        assert.equal(albIngress[0].ToPort, 80);
+      } else {
+        assert(albIngress.some(r => r.CidrIp === '0.0.0.0/0' && r.FromPort === 80));
+      }
+
       // Both Fargate task ENIs and EC2 bridge hosts retain the existing ECS SG.
       if (launchType === 'fargate') {
         const services = Object.values(template.findResources('AWS::ECS::Service'));

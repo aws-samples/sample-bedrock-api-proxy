@@ -35,7 +35,7 @@ A lightweight API translation service that lets you use various large language m
 **Key Advantages:**
 - 🔄 **Zero Code Migration** - Fully compatible with Anthropic API, no code changes required
 - 🚀 **Ready to Use** - Supports streaming/non-streaming, tool calling, multi-modal content
-- 🤖 **Programmatic Tool Calling** - First proxy to implement Anthropic-compatible PTC API on Bedrock
+- 🤖 **Programmatic Tool Calling** - Implements an Anthropic-compatible PTC API on Bedrock
 - 🔍 **Dynamic Web Search** - Supports `web_search_20250305` / `web_search_20260209` with dynamic code filtering
 - 🌐 **Web Fetch** - Supports `web_fetch_20250910` / `web_fetch_20260209`, no extra API key required
 - 🧠 **GPT Model Proxy** - OpenAI Responses API & Chat Completions API passthrough with proxy-managed web search
@@ -58,7 +58,7 @@ A lightweight API translation service that lets you use various large language m
 ### Advanced
 - **Programmatic Tool Calling (PTC)**: Claude generates and executes Python code in Docker sandbox for tool calling. Supports multi-round execution, `asyncio.gather` parallel calls, and session reuse.
 - **Web Search**: Proxy-side `web_search_20250305`/`web_search_20260209` via Tavily /Brave/ Bedrock AgentCore Gateway WebSearch. Domain filtering, search limits, user location. Dynamic filtering version requires Docker.
-- **[AgentCore Search MCP Server](agentcore-search-mcp/)**: Standalone MCP server ([PyPI](https://pypi.org/project/agentcore-search-mcp/): `uvx agentcore-search-mcp`) exposing Amazon Bedrock AgentCore Gateway WebSearch to any MCP client (Claude Code, Codex, Cursor) — a local stdio bridge that adds the SigV4 signing the gateway requires. Independent of the proxy; includes a one-shot gateway deployment script.
+- **[AgentCore Search MCP Server](agentcore-search-mcp/)**: Standalone MCP server ([PyPI](https://pypi.org/project/agentcore-search-mcp/): `uvx agentcore-search-mcp@0.1.0`, pin a released version and bump it deliberately) exposing Amazon Bedrock AgentCore Gateway WebSearch to any MCP client (Claude Code, Codex, Cursor) — a local stdio bridge that adds the SigV4 signing the gateway requires. Independent of the proxy; includes a one-shot gateway deployment script.
 - **Web Fetch**: Proxy-side `web_fetch_20250910`/`web_fetch_20260209` via httpx (no API key). PDF support. Dynamic filtering version requires Docker.
 - **Prompt Cache TTL**: Extends `cache_control` with configurable 1-hour TTL. Three-level priority: API key → request → env default.
 - **Beta Header Mapping**: Auto-maps Anthropic beta headers to Bedrock beta headers.
@@ -203,7 +203,7 @@ visit https://xxx.cloudfront.net/admin/ Admin portal to config api keys
 # Install (the model-mappings/ submodule holds the offline default model-mapping snapshot)
 git clone --recurse-submodules https://github.com/xiehust/sample-bedrock-api-proxy.git
 cd sample-bedrock-api-proxy   # already cloned? run: git submodule update --init
-pip install uv && uv sync
+pip install "uv==0.12.6" && uv sync --locked   # pinned uv; --locked installs exactly uv.lock
 cp env.example .env  # configure
 
 # Setup DynamoDB tables and create API key
@@ -613,13 +613,33 @@ upstream errors instead of silently retrying a different API.
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "InvokeModels",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:InvokeModelWithResponseStream"
       ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ReadModelMetadata",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetFoundationModel", "bedrock:GetInferenceProfile"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ListModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:ListFoundationModels"],
       "Resource": "*"
     },
     {
@@ -637,6 +657,8 @@ upstream errors instead of silently retrying a different API.
   ]
 }
 ```
+
+Scope `Resource` down to the specific model IDs / inference profiles you serve for production. `arn:aws:bedrock:::foundation-model/*` (no Region) is required for global cross-Region inference profiles (`global.*`); geographic profiles (`us.*`, `eu.*`, …) need the destination Regions' foundation-model ARNs, which `bedrock:*::` covers. `ListFoundationModels` does not support resource-level permissions.
 
 ## Development
 

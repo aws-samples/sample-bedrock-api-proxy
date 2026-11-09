@@ -127,7 +127,7 @@ async def create_api_key(request: ApiKeyCreate):
         provider_mgr = ProviderManager(
             dynamodb_resource=db_client.dynamodb,
             table_name=settings.dynamodb_providers_table,
-            encryption_secret=settings.provider_key_encryption_secret or "",
+            encryption_secret=settings.provider_key_encryption_secret,
         )
         provider = provider_mgr.get_provider(request.provider_id)
         if not provider:

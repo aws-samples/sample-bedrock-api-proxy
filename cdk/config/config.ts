@@ -115,7 +115,7 @@ export interface EnvironmentConfig {
   enableContainerInsights: boolean;
 
   // CloudFront Configuration
-  enableCloudFront: boolean;            // Enable CloudFront distribution with HTTPS
+  enableCloudFront: boolean;            // CloudFront HTTPS + internal ALB via VPC origin (false = public plain-HTTP ALB, testing only)
   cloudFrontOriginReadTimeout: number;  // Origin read timeout in seconds (up to 120 self-service; higher via AWS quota increase)
   cloudFrontDomainName?: string;        // Custom domain (alternate domain name), e.g. bedrock-api.example.com
   cloudFrontCertificateArn?: string;    // ACM cert ARN covering the custom domain — MUST be in us-east-1
