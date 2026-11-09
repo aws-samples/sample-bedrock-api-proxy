@@ -4,6 +4,7 @@ Rate limiting middleware.
 Implements token bucket rate limiting per API key using in-memory storage
 with optional Redis backend for distributed systems.
 """
+import logging
 import time
 from collections import defaultdict
 from typing import Callable, Dict
@@ -12,6 +13,9 @@ from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
+from app.core.redaction import key_fingerprint
+
+logger = logging.getLogger(__name__)
 
 
 class TokenBucket:
@@ -154,11 +158,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if not bucket.consume(1):
                 retry_after = int(bucket.get_time_until_available(1)) + 1
 
-                print(
-                    f"[RATE_LIMIT] Rate limit exceeded for master key"
+                logger.warning(
+                    "[RATE_LIMIT] Rate limit exceeded for master key "
+                    "(limit=%s, retry_after=%ss)",
+                    master_limit,
+                    retry_after,
                 )
-                print(f"  - Limit: {master_limit}")
-                print(f"  - Retry after: {retry_after}s")
 
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -209,9 +214,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Rate limit exceeded
             retry_after = int(bucket.get_time_until_available(1)) + 1
 
-            print(f"[RATE_LIMIT] Rate limit exceeded for API key: {api_key[:20]}...")
-            print(f"  - Limit: {rate_limit}")
-            print(f"  - Retry after: {retry_after}s")
+            # Log only the key's owner and a non-reversible fingerprint, never
+            # any characters of the key itself.
+            logger.warning(
+                "[RATE_LIMIT] Rate limit exceeded "
+                "(user_id=%s, key_fp=%s, limit=%s, retry_after=%ss)",
+                api_key_info.get("user_id", "unknown"),
+                key_fingerprint(api_key),
+                rate_limit,
+                retry_after,
+            )
 
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
