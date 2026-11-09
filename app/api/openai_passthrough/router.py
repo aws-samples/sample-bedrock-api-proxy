@@ -194,7 +194,7 @@ def _provider_manager() -> ProviderManager:
         _provider = ProviderManager(
             dynamodb_resource=_ddb.dynamodb,
             table_name=settings.dynamodb_providers_table,
-            encryption_secret=settings.provider_key_encryption_secret or "",
+            encryption_secret=settings.provider_key_encryption_secret,
         )
     return _provider
 

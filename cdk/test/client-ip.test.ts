@@ -14,7 +14,7 @@ for (const launchType of ['fargate', 'ec2'] as const) {
   for (const enableCloudFront of [false, true]) {
     test(`${launchType}: ${enableCloudFront ? 'CloudFront + ALB' : 'ALB'} trust boundary`, (t) => {
       // Topology tests need no Docker context hashing/staging or image builds.
-      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('test/image'));
+      t.mock.method(ContainerImage, 'fromAsset', () => ContainerImage.fromRegistry('public.ecr.aws/docker/library/busybox:latest'));
       const app = new cdk.App();
       const config = {
         ...getConfig('dev'), launchType, enableCloudFront,
@@ -63,6 +63,26 @@ for (const launchType of ['fargate', 'ec2'] as const) {
       assert.deepEqual(vars.CLIENT_IP_TRUSTED_PROXY_CIDRS,
         stack.resolve(albSubnets.map(s => s.ipv4CidrBlock).join(',')));
       assert.equal(proxy.Command, undefined, 'do not override the protected Docker CMD');
+
+      // Provider credentials are encrypted at rest: proxy and admin containers
+      // both receive the encryption key from Secrets Manager.
+      const withEncKey = containers.filter((c: any) =>
+        (c.Secrets ?? []).some((s: any) => s.Name === 'PROVIDER_KEY_ENCRYPTION_SECRET'));
+      assert.equal(withEncKey.length, 2, 'proxy + admin get PROVIDER_KEY_ENCRYPTION_SECRET');
+
+      // Bedrock invoke permissions are scoped by resource type, never '*'.
+      // CDK may split large role policies into overflow managed policies.
+      const statements = [
+        ...Object.values(template.findResources('AWS::IAM::Policy')),
+        ...Object.values(template.findResources('AWS::IAM::ManagedPolicy')),
+      ].flatMap((p: any) => p.Properties.PolicyDocument.Statement);
+      const invoke = statements.filter((st: any) =>
+        ([] as string[]).concat(st.Action).some(a => a.startsWith('bedrock:Invoke')));
+      assert(invoke.length >= 1);
+      for (const st of invoke) {
+        assert(Array.isArray(st.Resource), 'invoke resources must be an explicit list');
+        assert(!st.Resource.includes('*'), 'no wildcard resource for bedrock:Invoke*');
+      }
 
       const listeners = Object.values(template.findResources('AWS::ElasticLoadBalancingV2::Listener'));
       assert.equal(listeners.length, 1, 'no alternate unprotected listener');

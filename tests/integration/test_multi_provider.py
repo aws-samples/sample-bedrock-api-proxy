@@ -20,7 +20,7 @@ def test_full_provider_flow():
         db = DynamoDBClient()
         db.create_tables()
 
-        mgr = ProviderManager(
+        mgr = ProviderManager(  # nosec B106 - fake test fixture value, not a real credential
             dynamodb_resource=db.dynamodb,
             table_name=settings.dynamodb_providers_table,
             encryption_secret="test-secret",
@@ -68,7 +68,7 @@ def test_provider_with_bearer_token():
         db = DynamoDBClient()
         db.create_tables()
 
-        mgr = ProviderManager(
+        mgr = ProviderManager(  # nosec B106 - fake test fixture value, not a real credential
             dynamodb_resource=db.dynamodb,
             table_name=settings.dynamodb_providers_table,
             encryption_secret="test-secret",
@@ -125,7 +125,7 @@ def test_provider_crud_lifecycle():
         db = DynamoDBClient()
         db.create_tables()
 
-        mgr = ProviderManager(
+        mgr = ProviderManager(  # nosec B106 - fake test fixture value, not a real credential
             dynamodb_resource=db.dynamodb,
             table_name=settings.dynamodb_providers_table,
             encryption_secret="test-secret",

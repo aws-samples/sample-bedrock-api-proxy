@@ -65,7 +65,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # Server Settings
-    host: str = Field(default="0.0.0.0", alias="HOST")
+    # Loopback by default for local runs. Containers bind 0.0.0.0 explicitly
+    # (Dockerfile CMD / docker-compose HOST), where the published port is the boundary.
+    host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
     workers: int = Field(default=1, alias="WORKERS")
     reload: bool = Field(default=False, alias="RELOAD")
@@ -557,6 +559,15 @@ class Settings(BaseSettings):
         default=20 * 1024 * 1024,
         alias="IMAGE_URL_FETCH_MAX_BYTES",
         description="Maximum bytes to download per image URL (Bedrock applies its own stricter limits downstream)"
+    )
+    image_url_fetch_allow_private_networks: bool = Field(
+        default=False,
+        alias="IMAGE_URL_FETCH_ALLOW_PRIVATE_NETWORKS",
+        description=(
+            "Allow image URL sources that resolve to private, loopback, link-local or "
+            "cloud-metadata addresses. Off by default (SSRF protection); enable only if "
+            "clients must reference images on internal hosts and egress is otherwise restricted."
+        ),
     )
 
     # === OpenAI-Compatible API Settings (Bedrock Runtime and Mantle) ===

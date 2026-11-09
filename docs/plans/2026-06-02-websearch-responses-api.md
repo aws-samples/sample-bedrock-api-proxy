@@ -151,10 +151,10 @@ Changes in `responses_create` web-search branch:
 ### Task 7: Deploy to dev + live end-to-end verification
 
 - Redeploy dev (same command/flags as before) from this branch.
-- Verify via the proxy with key `sk-6ea3defb0c894f1a8d86d7acb5e8911e`:
+- Verify via the proxy with key `$PROXY_API_KEY` (your proxy API key):
   ```bash
   curl -s -X POST https://<cloudfront>/openai/v1/responses \
-    -H "Authorization: Bearer sk-6ea3defb0c894f1a8d86d7acb5e8911e" \
+    -H "Authorization: Bearer $PROXY_API_KEY" \
     -H "Content-Type: application/json" \
     -d '{"model":"openai.gpt-5.5","input":"What is the latest AWS news?","tools":[{"type":"web_search"}]}'
   ```

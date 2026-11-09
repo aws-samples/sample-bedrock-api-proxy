@@ -350,7 +350,7 @@ class BedrockService:
             self._provider_manager = ProviderManager(
                 dynamodb_resource=self.dynamodb_client.dynamodb,
                 table_name=settings.dynamodb_providers_table,
-                encryption_secret=settings.provider_key_encryption_secret or "",
+                encryption_secret=settings.provider_key_encryption_secret,
             )
         return self._provider_manager
 

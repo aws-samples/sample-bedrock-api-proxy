@@ -6,7 +6,7 @@
 # Build: docker build -t ptc-sandbox:datascience .
 # Usage: Set PTC_SANDBOX_IMAGE=ptc-sandbox:datascience in your .env
 
-FROM python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 LABEL maintainer="Anthropic API Proxy"
 LABEL description="PTC Sandbox with data science packages"

@@ -18,7 +18,7 @@ from admin_portal.backend.middleware.cognito_auth import (
     is_public_spa_path,
 )
 
-SECRET = "TOP-SECRET-CONFIG"
+SECRET = "TOP-SECRET-CONFIG"  # nosec B105 - fake test fixture value, not a real credential
 
 
 @pytest.fixture

@@ -48,6 +48,8 @@ export class ECSStack extends cdk.Stack {
   private adminTargetGroup?: elbv2.ApplicationTargetGroup;
   /** Construct-ID suffix for load-balancer resources ('Private' in CloudFront mode). */
   private readonly lbIdSuffix: string;
+  /** PROVIDER_KEY_ENCRYPTION_SECRET, injected into proxy and admin containers. */
+  private readonly providerKeyEncryptionSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: ECSStackProps) {
     super(scope, id, props);
@@ -181,16 +183,52 @@ export class ECSStack extends cdk.Stack {
     responseContextTable.grantReadWriteData(taskRole);
     speedTestsTable.grantReadWriteData(taskRole);
 
-    // Grant Bedrock permissions
+    // Grant Bedrock permissions, scoped to Bedrock model resource types rather
+    // than '*'. Model IDs are resolved at runtime (remote model mapping, admin
+    // overrides, client-supplied ARNs), so resources are scoped by type:
+    //   - foundation models in any Region (geographic cross-Region inference
+    //     routes to destination Regions) and the Region-less ARN used by global
+    //     cross-Region inference;
+    //   - this account's inference profiles and custom/provisioned/imported models.
+    // For production, narrow these further to the model IDs you actually serve.
+    const bedrockAccountArn = (resource: string) =>
+      `arn:${cdk.Aws.PARTITION}:bedrock:*:${cdk.Aws.ACCOUNT_ID}:${resource}`;
     taskRole.addToPolicy(
       new iam.PolicyStatement({
+        sid: 'BedrockInvokeModels',
         effect: iam.Effect.ALLOW,
         actions: [
           'bedrock:InvokeModel',
           'bedrock:InvokeModelWithResponseStream',
-          'bedrock:ListFoundationModels',
-          'bedrock:GetInferenceProfile',
         ],
+        resources: [
+          `arn:${cdk.Aws.PARTITION}:bedrock:*::foundation-model/*`,
+          `arn:${cdk.Aws.PARTITION}:bedrock:::foundation-model/*`,
+          bedrockAccountArn('inference-profile/*'),
+          bedrockAccountArn('application-inference-profile/*'),
+          bedrockAccountArn('provisioned-model/*'),
+          bedrockAccountArn('imported-model/*'),
+          bedrockAccountArn('custom-model-deployment/*'),
+        ],
+      })
+    );
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockGetInferenceProfile',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:GetInferenceProfile'],
+        resources: [
+          bedrockAccountArn('inference-profile/*'),
+          bedrockAccountArn('application-inference-profile/*'),
+        ],
+      })
+    );
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockListFoundationModels',
+        effect: iam.Effect.ALLOW,
+        // ListFoundationModels does not support resource-level permissions.
+        actions: ['bedrock:ListFoundationModels'],
         resources: ['*'],
       })
     );
@@ -250,6 +288,22 @@ export class ECSStack extends cdk.Stack {
 
     // Grant read access to secret
     masterApiKeySecret.grantRead(taskRole);
+
+    // Encryption key for provider credentials stored in DynamoDB (multi-provider
+    // providers + provider key pool). Without it the application refuses to
+    // store provider credentials. Retained in prod: deleting it would make every
+    // stored provider credential undecryptable.
+    this.providerKeyEncryptionSecret = new secretsmanager.Secret(this, 'ProviderKeyEncryptionSecret', {
+      secretName: `anthropic-proxy-${config.environmentName}-provider-key-encryption`,
+      description: 'Encryption key for provider credentials stored in DynamoDB',
+      generateSecretString: {
+        excludePunctuation: true,
+        passwordLength: 48,
+      },
+      removalPolicy: config.environmentName === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+    });
 
     // Map platform string to ECS CpuArchitecture
     const cpuArchitecture = config.platform === 'arm64'
@@ -659,6 +713,7 @@ export class ECSStack extends cdk.Stack {
       environment: environmentVars,
       secrets: {
         MASTER_API_KEY: ecs.Secret.fromSecretsManager(masterApiKeySecret, 'password'),
+        PROVIDER_KEY_ENCRYPTION_SECRET: ecs.Secret.fromSecretsManager(this.providerKeyEncryptionSecret),
       },
       portMappings: [
         {
@@ -863,6 +918,7 @@ export class ECSStack extends cdk.Stack {
       environment: environmentVars,
       secrets: {
         MASTER_API_KEY: ecs.Secret.fromSecretsManager(masterApiKeySecret, 'password'),
+        PROVIDER_KEY_ENCRYPTION_SECRET: ecs.Secret.fromSecretsManager(this.providerKeyEncryptionSecret),
       },
       memoryReservationMiB: config.ecsMemory,
       cpu: config.ecsCpu,
@@ -1063,6 +1119,9 @@ export class ECSStack extends cdk.Stack {
         logGroup: adminLogGroup,
       }),
       environment: adminEnvVars,
+      secrets: {
+        PROVIDER_KEY_ENCRYPTION_SECRET: ecs.Secret.fromSecretsManager(this.providerKeyEncryptionSecret),
+      },
       portMappings: [
         {
           containerPort: config.adminPortalContainerPort,

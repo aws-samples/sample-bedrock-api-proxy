@@ -613,13 +613,33 @@ upstream errors instead of silently retrying a different API.
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "InvokeModels",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:InvokeModelWithResponseStream"
       ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ReadModelMetadata",
+      "Effect": "Allow",
+      "Action": ["bedrock:GetFoundationModel", "bedrock:GetInferenceProfile"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:inference-profile/*",
+        "arn:aws:bedrock:*:<ACCOUNT_ID>:application-inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "ListModels",
+      "Effect": "Allow",
+      "Action": ["bedrock:ListFoundationModels"],
       "Resource": "*"
     },
     {
@@ -637,6 +657,8 @@ upstream errors instead of silently retrying a different API.
   ]
 }
 ```
+
+Scope `Resource` down to the specific model IDs / inference profiles you serve for production. `arn:aws:bedrock:::foundation-model/*` (no Region) is required for global cross-Region inference profiles (`global.*`); geographic profiles (`us.*`, `eu.*`, …) need the destination Regions' foundation-model ARNs, which `bedrock:*::` covers. `ListFoundationModels` does not support resource-level permissions.
 
 ## Development
 

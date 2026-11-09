@@ -11,6 +11,10 @@ import httpx
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 
+# Values of the Cognito "token_use" claim (claim types, not secrets).
+_ACCESS_TOKEN_USE = "access"  # nosec B105 - JWT claim value, not a credential
+_ALLOWED_TOKEN_USE = frozenset({"id", _ACCESS_TOKEN_USE})
+
 
 class CognitoJWTValidationError(Exception):
     """Exception raised when JWT validation fails."""
@@ -157,15 +161,16 @@ class CognitoJWTValidator:
                 },
             )
 
-            # Verify token_use claim (should be "id" or "access")
-            token_use = claims.get("token_use")
-            if token_use not in ("id", "access"):
+            # Verify the token_use claim (Cognito sets it to "id" or "access";
+            # these are claim values, not credentials).
+            use_claim = claims.get("token_use")
+            if use_claim not in _ALLOWED_TOKEN_USE:
                 raise CognitoJWTValidationError(
-                    f"Invalid token_use: {token_use}. Expected 'id' or 'access'"
+                    f"Invalid token_use: {use_claim}. Expected 'id' or 'access'"
                 )
 
             # For access tokens, verify client_id claim instead of aud
-            if token_use == "access":
+            if use_claim == _ACCESS_TOKEN_USE:
                 if claims.get("client_id") != self.client_id:
                     raise CognitoJWTValidationError(
                         f"Invalid client_id in access token"

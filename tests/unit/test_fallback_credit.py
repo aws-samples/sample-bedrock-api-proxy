@@ -22,12 +22,12 @@ def service():
 
 
 def test_message_request_accepts_fallback_credit_token():
-    req = MessageRequest(
+    req = MessageRequest(  # nosec B106 - fake test fixture value, not a real credential
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}],
         fallback_credit_token="opaque-token",
     )
-    assert req.fallback_credit_token == "opaque-token"
+    assert req.fallback_credit_token == "opaque-token"  # nosec B105 - fake test fixture value, not a real credential
 
 
 def test_message_request_token_defaults_to_none():
@@ -39,7 +39,7 @@ def test_message_request_token_defaults_to_none():
 
 
 def test_native_request_forwards_fallback_credit_token(service):
-    req = MessageRequest(
+    req = MessageRequest(  # nosec B106 - fake test fixture value, not a real credential
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}],
         fallback_credit_token="opaque-token",

@@ -15,8 +15,7 @@ NC='\033[0m' # No Color
 ENVIRONMENT="dev"
 REGION="${AWS_REGION:-us-west-2}"
 EMAIL=""
-TEMP_PASSWORD=""
-SUPPRESS_INVITE=false
+PROMPT_PASSWORD=false
 
 # Usage
 usage() {
@@ -29,21 +28,20 @@ OPTIONS:
     -e, --environment ENV      Environment (dev|prod) [default: dev]
     -r, --region REGION        AWS region [default: us-west-2]
     --email EMAIL              User email address (required)
-    --password PASSWORD        Temporary password (optional, will be generated if not provided)
-    --suppress-invite          Don't send invitation email (user must be told password)
+    --prompt-password          Enter the temporary password at a hidden prompt instead of
+                               having Cognito email one (no invitation email is sent)
     -h, --help                 Show this help message
 
 EXAMPLES:
-    # Create admin user with auto-generated temporary password
+    # Create admin user; Cognito emails a one-time temporary password
     ./scripts/create-admin-user.sh -e dev --email admin@example.com
 
-    # Create admin user with specific temporary password
-    ./scripts/create-admin-user.sh -e prod -r us-east-1 --email admin@example.com --password 'TempPass123!'
-
-    # Create user without sending invitation email
-    ./scripts/create-admin-user.sh -e dev --email admin@example.com --suppress-invite
+    # No email delivery available: type the temporary password at a hidden prompt
+    ./scripts/create-admin-user.sh -e prod -r us-east-1 --email admin@example.com --prompt-password
 
 NOTES:
+    - The temporary password is never printed, logged or accepted as a
+      command-line argument (it would land in shell history / process lists)
     - The user will be required to change their password on first login
     - Password must meet Cognito requirements:
       * Minimum 12 characters
@@ -56,20 +54,15 @@ EOF
     exit 1
 }
 
-# Generate a random password that meets Cognito requirements
-generate_password() {
-    # Generate a password with: uppercase, lowercase, numbers, special chars
-    local password=""
-    # 4 uppercase
-    password+=$(cat /dev/urandom | tr -dc 'A-Z' | head -c 4)
-    # 4 lowercase
-    password+=$(cat /dev/urandom | tr -dc 'a-z' | head -c 4)
-    # 3 numbers
-    password+=$(cat /dev/urandom | tr -dc '0-9' | head -c 3)
-    # 2 special chars
-    password+=$(cat /dev/urandom | tr -dc '@#$%&*!' | head -c 2)
-    # Shuffle the password
-    echo "$password" | fold -w1 | shuf | tr -d '\n'
+# Read a temporary password from a hidden prompt (never echoed or stored)
+read_temp_password() {
+    local confirm
+    read -r -s -p "Temporary password: " TEMP_PASSWORD; echo
+    read -r -s -p "Confirm temporary password: " confirm; echo
+    if [[ -z "$TEMP_PASSWORD" || "$TEMP_PASSWORD" != "$confirm" ]]; then
+        echo -e "${RED}Error: passwords are empty or do not match${NC}"
+        exit 1
+    fi
 }
 
 # Parse arguments
@@ -88,11 +81,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --password)
-            TEMP_PASSWORD="$2"
-            shift 2
+            echo -e "${RED}Error: --password was removed: passwords on the command line leak into shell history and process listings.${NC}"
+            echo -e "${RED}Omit it (Cognito emails a temporary password) or use --prompt-password.${NC}"
+            exit 1
             ;;
-        --suppress-invite)
-            SUPPRESS_INVITE=true
+        --prompt-password|--suppress-invite)
+            PROMPT_PASSWORD=true
             shift
             ;;
         -h|--help)
@@ -154,30 +148,26 @@ fi
 
 echo -e "${GREEN}Found User Pool: ${USER_POOL_ID}${NC}"
 
-# Generate password if not provided
-if [[ -z "$TEMP_PASSWORD" ]]; then
-    TEMP_PASSWORD=$(generate_password)
-    echo -e "${YELLOW}Generated temporary password${NC}"
-fi
-
 # Check if user already exists
 echo -e "${YELLOW}Checking if user already exists...${NC}"
 if aws cognito-idp admin-get-user \
     --user-pool-id "$USER_POOL_ID" \
     --username "$EMAIL" \
     --region "$REGION" &> /dev/null; then
-    echo -e "${YELLOW}User already exists. Do you want to reset their password? (y/n)${NC}"
+    echo -e "${YELLOW}User already exists. Do you want to set a new temporary password? (y/n)${NC}"
     read -p "" -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Resetting password...${NC}"
+        read_temp_password
+        echo -e "${YELLOW}Setting temporary password...${NC}"
         aws cognito-idp admin-set-user-password \
             --user-pool-id "$USER_POOL_ID" \
             --username "$EMAIL" \
             --password "$TEMP_PASSWORD" \
             --no-permanent \
             --region "$REGION"
-        echo -e "${GREEN}Password reset successfully!${NC}"
+        unset TEMP_PASSWORD
+        echo -e "${GREEN}Temporary password set. Share it with the user out of band.${NC}"
     else
         echo -e "${YELLOW}Aborted.${NC}"
         exit 0
@@ -189,16 +179,20 @@ else
     CREATE_ARGS=(
         "--user-pool-id" "$USER_POOL_ID"
         "--username" "$EMAIL"
-        "--temporary-password" "$TEMP_PASSWORD"
         "--user-attributes" "Name=email,Value=$EMAIL" "Name=email_verified,Value=true"
         "--region" "$REGION"
     )
 
-    if [[ "$SUPPRESS_INVITE" == true ]]; then
-        CREATE_ARGS+=("--message-action" "SUPPRESS")
+    if [[ "$PROMPT_PASSWORD" == true ]]; then
+        read_temp_password
+        CREATE_ARGS+=("--temporary-password" "$TEMP_PASSWORD" "--message-action" "SUPPRESS")
+    else
+        # Cognito generates the one-time password and emails it to the user
+        CREATE_ARGS+=("--desired-delivery-mediums" "EMAIL")
     fi
 
-    aws cognito-idp admin-create-user "${CREATE_ARGS[@]}"
+    aws cognito-idp admin-create-user "${CREATE_ARGS[@]}" > /dev/null
+    unset TEMP_PASSWORD
 
     echo -e "${GREEN}User created successfully!${NC}"
 fi
@@ -209,9 +203,13 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Admin User Created${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo
-echo -e "${BLUE}Login Credentials:${NC}"
+echo -e "${BLUE}Login:${NC}"
 echo -e "  Email: ${YELLOW}${EMAIL}${NC}"
-echo -e "  Temporary Password: ${YELLOW}${TEMP_PASSWORD}${NC}"
+if [[ "$PROMPT_PASSWORD" == true ]]; then
+    echo -e "  Temporary password: the one you entered (share it with the user out of band)"
+else
+    echo -e "  Temporary password: emailed to ${EMAIL} by Cognito"
+fi
 echo
 echo -e "${BLUE}Admin Portal URL:${NC}"
 CF_DOMAIN=$(aws cloudformation describe-stacks \
@@ -241,6 +239,6 @@ echo
 echo -e "${YELLOW}IMPORTANT:${NC}"
 echo -e "  - The user must change their password on first login"
 echo -e "  - Password requirements: 12+ chars, uppercase, lowercase, number, special char"
-echo -e "  - Save these credentials securely - the temporary password won't be shown again"
+echo -e "  - The temporary password is one-time: it expires and must be changed at first login"
 echo
 echo -e "${GREEN}========================================${NC}"

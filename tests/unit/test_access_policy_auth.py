@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.middleware.auth import AuthMiddleware
 
 ROOT = Path(__file__).resolve().parents[2]
-SECRET = "sk-never-log-this-secret"
+SECRET = "sk-never-log-this-secret"  # nosec B105 - fake test fixture value, not a real credential
 
 
 def policy():
