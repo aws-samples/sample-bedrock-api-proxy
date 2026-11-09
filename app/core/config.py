@@ -65,7 +65,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # Server Settings
-    host: str = Field(default="0.0.0.0", alias="HOST")
+    # Loopback by default for local runs. Containers bind 0.0.0.0 explicitly
+    # (Dockerfile CMD / docker-compose HOST), where the published port is the boundary.
+    host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
     workers: int = Field(default=1, alias="WORKERS")
     reload: bool = Field(default=False, alias="RELOAD")
