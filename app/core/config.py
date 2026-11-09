@@ -558,6 +558,15 @@ class Settings(BaseSettings):
         alias="IMAGE_URL_FETCH_MAX_BYTES",
         description="Maximum bytes to download per image URL (Bedrock applies its own stricter limits downstream)"
     )
+    image_url_fetch_allow_private_networks: bool = Field(
+        default=False,
+        alias="IMAGE_URL_FETCH_ALLOW_PRIVATE_NETWORKS",
+        description=(
+            "Allow image URL sources that resolve to private, loopback, link-local or "
+            "cloud-metadata addresses. Off by default (SSRF protection); enable only if "
+            "clients must reference images on internal hosts and egress is otherwise restricted."
+        ),
+    )
 
     # === OpenAI-Compatible API Settings (Bedrock Runtime and Mantle) ===
     enable_bedrock_responses: bool = Field(

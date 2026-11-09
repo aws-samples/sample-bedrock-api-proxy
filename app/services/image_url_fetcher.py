@@ -5,9 +5,14 @@ Resolves UrlImageSource blocks on inbound /v1/messages requests by downloading
 the URL and replacing the source with a Base64ImageSource so the rest of the
 pipeline (converter -> Bedrock) operates on bytes as it does today.
 
-No SSRF allowlist or private-IP blocking by design - operators are expected to
-restrict outbound network reachability via firewall/VPC policy. We enforce
-scheme, wall-clock timeout, size cap, and supported content type only.
+SSRF protection (default on): the destination host is resolved and every
+resolved address must be public - private, loopback, link-local, reserved and
+cloud-metadata addresses are rejected. The validated IP is pinned for the
+connection (no DNS-rebinding window) and each redirect hop is re-validated.
+This reuses the web_fetch SSRF guard. Operators who must fetch images from
+internal hosts can opt out with IMAGE_URL_FETCH_ALLOW_PRIVATE_NETWORKS=true;
+network egress policy remains defense in depth either way. Scheme, wall-clock
+timeout, size cap and supported content type are always enforced.
 """
 
 import asyncio
@@ -26,8 +31,16 @@ from app.schemas.anthropic import (
     ToolResultContent,
     UrlImageSource,
 )
+from app.services.web_fetch.providers import (
+    FetchError,
+    _create_pinned_transport,
+    _pre_request_ssrf_check,
+    _resolve_and_validate,
+)
 
 logger = logging.getLogger(__name__)
+
+MAX_REDIRECTS = 5
 
 SUPPORTED_MEDIA_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -104,9 +117,25 @@ async def fetch_image_url(
         )
 
     safe = _safe_url(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ImageUrlFetchError(f"image URL has no host: {safe}")
+    guard = not settings.image_url_fetch_allow_private_networks
 
     async def _do_fetch() -> tuple[bytearray, str]:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        client_kwargs: dict = {
+            "timeout": timeout,
+            "follow_redirects": True,
+            "max_redirects": MAX_REDIRECTS,
+        }
+        if guard:
+            # Resolve + validate off the event loop, then pin the validated IP so
+            # the TCP connection cannot be rebound to an internal address.
+            pinned_ip = await asyncio.to_thread(_resolve_and_validate, hostname)
+            client_kwargs["transport"] = _create_pinned_transport(hostname, pinned_ip)
+            # Re-validate every outbound request, including each redirect hop.
+            client_kwargs["event_hooks"] = {"request": [_pre_request_ssrf_check]}
+        async with httpx.AsyncClient(**client_kwargs) as client:
             async with client.stream("GET", url) as response:
                 if response.status_code >= 400:
                     raise ImageUrlFetchError(
@@ -117,6 +146,15 @@ async def fetch_image_url(
 
     try:
         buf, content_type_header = await asyncio.wait_for(_do_fetch(), timeout=timeout)
+    except FetchError as e:
+        # Full detail (resolved IP) stays server-side; the client only learns
+        # that the destination is not allowed.
+        logger.warning("[image_url_fetcher] blocked %s: %s", safe, e)
+        if e.error_code == "ssrf_blocked":
+            raise ImageUrlFetchError(
+                f"image URL destination is not allowed (private or internal address): {safe}"
+            ) from e
+        raise ImageUrlFetchError(f"image URL fetch failed: {safe}") from e
     except (TimeoutError, httpx.TimeoutException) as e:
         raise ImageUrlFetchError(f"image URL fetch timed out: {safe}") from e
     except httpx.HTTPError as e:
