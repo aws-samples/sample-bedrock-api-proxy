@@ -13,7 +13,6 @@ from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.core.redaction import key_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -214,13 +213,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Rate limit exceeded
             retry_after = int(bucket.get_time_until_available(1)) + 1
 
-            # Log only the key's owner and a non-reversible fingerprint, never
-            # any characters of the key itself.
+            # Identify the key by its owner and display name only; never log the
+            # key or any value derived from it.
             logger.warning(
                 "[RATE_LIMIT] Rate limit exceeded "
-                "(user_id=%s, key_fp=%s, limit=%s, retry_after=%ss)",
+                "(user_id=%s, key_name=%s, limit=%s, retry_after=%ss)",
                 api_key_info.get("user_id", "unknown"),
-                key_fingerprint(api_key),
+                api_key_info.get("name", "unknown"),
                 rate_limit,
                 retry_after,
             )
