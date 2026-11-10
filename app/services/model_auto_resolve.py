@@ -39,7 +39,7 @@ def _list_profile_ids() -> set[str]:
     client = boto3.client("bedrock", region_name=settings.aws_region)
     ids: set[str] = set()
     paginator = client.get_paginator("list_inference_profiles")
-    for page in paginator.paginate(typeOfInferenceProfile="SYSTEM_DEFINED"):
+    for page in paginator.paginate(typeEquals="SYSTEM_DEFINED"):
         for summary in page.get("inferenceProfileSummaries", []):
             if summary.get("status", "ACTIVE") == "ACTIVE":
                 ids.add(summary["inferenceProfileId"])
