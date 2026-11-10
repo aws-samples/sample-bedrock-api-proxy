@@ -368,7 +368,14 @@ class AnthropicToBedrockConverter:
         bedrock_model_id = self.model_mapping.get(anthropic_model_id)
 
         if not bedrock_model_id:
-            # Priority 3: Pass-through - assume it's already a valid Bedrock model ID
+            # Priority 3: Auto-resolve claude-* names that Bedrock lists as an
+            # inference profile (saved as a DynamoDB mapping on success)
+            from app.services.model_auto_resolve import auto_resolve
+            resolved = auto_resolve(anthropic_model_id, self._model_mapping_manager)
+            if resolved:
+                print(f"[CONVERTER] Auto-resolved: {anthropic_model_id} → {resolved}")
+                return resolved
+            # Priority 4: Pass-through - assume it's already a valid Bedrock model ID
             # This allows users to directly specify Bedrock model ARNs
             print(f"[CONVERTER] No mapping found, using pass-through: {anthropic_model_id}")
             return anthropic_model_id

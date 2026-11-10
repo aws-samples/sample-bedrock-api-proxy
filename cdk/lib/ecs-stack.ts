@@ -163,6 +163,8 @@ export class ECSStack extends cdk.Stack {
           'bedrock:InvokeModelWithResponseStream',
           'bedrock:ListFoundationModels',
           'bedrock:GetInferenceProfile',
+          // Model auto-resolve checks that claude-* names exist as profiles
+          'bedrock:ListInferenceProfiles',
         ],
         resources: ['*'],
       })
@@ -1031,6 +1033,9 @@ export class ECSStack extends cdk.Stack {
       COGNITO_REGION: config.region,
       // Static file serving
       SERVE_STATIC_FILES: 'true',
+      // Daily pricing sync from the LiteLLM price table, so new Bedrock models
+      // get pricing without manual entry. Manually edited rows are kept.
+      PRICING_SYNC_ENABLED: 'true',
     };
 
     // Add Admin Portal Container

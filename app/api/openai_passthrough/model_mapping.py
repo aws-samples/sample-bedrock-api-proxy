@@ -30,4 +30,11 @@ def resolve_model_id(model: str, model_mapping_manager) -> str:
     except Exception as exc:
         logger.warning("[OPENAI-PASSTHROUGH] model mapping lookup failed for %r: %s", model, exc)
         mapped = None
-    return mapped or settings.default_model_mapping.get(model, model)
+    if mapped:
+        return mapped
+    default = settings.default_model_mapping.get(model)
+    if default:
+        return default
+    from app.services.model_auto_resolve import auto_resolve
+
+    return auto_resolve(model, model_mapping_manager) or model

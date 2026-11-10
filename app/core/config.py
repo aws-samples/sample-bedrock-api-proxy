@@ -407,6 +407,20 @@ class Settings(BaseSettings):
                     "(e.g. the admin portal) take up to this long to apply.",
     )
 
+    # Model auto-resolve: unmapped claude-* names -> Bedrock inference profiles
+    model_auto_resolve_enabled: bool = Field(
+        default=True,
+        alias="MODEL_AUTO_RESOLVE_ENABLED",
+        description="Resolve unmapped claude-<name> to global.anthropic.claude-<name> "
+                    "(claude-<name>-us to us.anthropic.claude-<name>) when Bedrock lists "
+                    "that inference profile, and save the result as a DynamoDB mapping.",
+    )
+    model_auto_resolve_cache_ttl_seconds: int = Field(
+        default=3600,
+        alias="MODEL_AUTO_RESOLVE_CACHE_TTL_SECONDS",
+        description="How often (seconds) to refresh the list of Bedrock inference profiles.",
+    )
+
     # Beta features that require InvokeModel API instead of Converse API
     # These features are only available via InvokeModel/InvokeModelWithResponseStream
     beta_headers_requiring_invoke_model: List[str] = Field(
