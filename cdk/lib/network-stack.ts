@@ -29,6 +29,14 @@ export class NetworkStack extends cdk.Stack {
           subnetType: ec2.SubnetType.PUBLIC,
           cidrMask: 24,
         },
+        // A VPC first created with maxAzs=3 has Public x.0-2/24 and Private
+        // x.3-5/24. Shrinking it to 2 AZs would recompute Private as x.2-3/24
+        // and force replacement of live, cross-stack-exported subnets (which
+        // CloudFormation rejects). Two reserved /25s (never created) occupy
+        // x.2.0/24 so Private stays at x.3-4/24 and AZ a/b subnets are kept.
+        ...(config.vpcLegacy3AzCidrs
+          ? [{ name: 'Reserved', subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 25, reserved: true }]
+          : []),
         {
           name: 'Private',
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
