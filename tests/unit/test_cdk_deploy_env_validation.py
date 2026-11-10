@@ -31,7 +31,8 @@ def run_deploy(env_local=os.devnull, **env_overrides):
     env["PATH"] = "/nonexistent"
     env["CDK_ENV_LOCAL_FILE"] = str(env_local)
     for key in ("BEDROCK_API_KEY", "OPENAI_API_KEY",
-                "ENABLE_OPENAI_COMPAT", "ENABLE_OPENAI_PASSTHROUGH"):
+                "ENABLE_OPENAI_COMPAT", "ENABLE_OPENAI_PASSTHROUGH",
+                "MANTLE_ENDPOINT_URL", "OPENAI_BASE_URL"):
         env.pop(key, None)
     env.update(env_overrides)
 
@@ -46,30 +47,38 @@ def run_deploy(env_local=os.devnull, **env_overrides):
     )
 
 
-@pytest.mark.parametrize(
-    "flag,expected_message",
-    [
-        ("ENABLE_OPENAI_COMPAT",
-         "BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true"),
-        # Passthrough was omitted from the original guard, so prod ran with the
-        # feature enabled and no credentials for weeks.
-        ("ENABLE_OPENAI_PASSTHROUGH",
-         "BEDROCK_API_KEY is required when ENABLE_OPENAI_PASSTHROUGH=true"),
-    ],
-)
-def test_deploy_requires_bedrock_api_key(flag, expected_message):
-    result = run_deploy(**{flag: "true"})
+MANTLE_URL = "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
+RUNTIME_URL = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+
+
+@pytest.mark.parametrize("flag", ["ENABLE_OPENAI_COMPAT", "ENABLE_OPENAI_PASSTHROUGH"])
+@pytest.mark.parametrize("endpoint", [None, RUNTIME_URL])
+def test_runtime_endpoint_needs_no_api_key(flag, endpoint):
+    """Bedrock Runtime (the default) is signed with the task role (SigV4)."""
+    overrides = {flag: "true"}
+    if endpoint:
+        overrides["MANTLE_ENDPOINT_URL"] = endpoint
+    result = run_deploy(**overrides)
+    output = result.stdout + result.stderr
+
+    assert "BEDROCK_API_KEY is required" not in output, output
+    assert "Checking prerequisites" in output
+
+
+@pytest.mark.parametrize("flag", ["ENABLE_OPENAI_COMPAT", "ENABLE_OPENAI_PASSTHROUGH"])
+def test_non_runtime_endpoint_requires_bedrock_api_key(flag):
+    result = run_deploy(**{flag: "true", "MANTLE_ENDPOINT_URL": MANTLE_URL})
     output = result.stdout + result.stderr
 
     assert result.returncode == 1, output
-    assert expected_message in output
+    assert "BEDROCK_API_KEY is required" in output
     # Must fail before doing any real work.
     assert "Checking prerequisites" not in output
 
 
 def test_validation_survives_bash_3_2():
     """The guard must not abort on bash-4-only parameter expansion."""
-    result = run_deploy(ENABLE_OPENAI_COMPAT="true")
+    result = run_deploy(ENABLE_OPENAI_COMPAT="true", MANTLE_ENDPOINT_URL=MANTLE_URL)
     output = result.stdout + result.stderr
 
     assert "bad substitution" not in output, (
@@ -81,7 +90,7 @@ def test_validation_survives_bash_3_2():
 def test_flag_value_is_case_insensitive():
     """TRUE/True/true must all trigger validation."""
     for value in ("TRUE", "True", "true"):
-        result = run_deploy(ENABLE_OPENAI_COMPAT=value)
+        result = run_deploy(ENABLE_OPENAI_COMPAT=value, MANTLE_ENDPOINT_URL=MANTLE_URL)
         output = result.stdout + result.stderr
         assert "BEDROCK_API_KEY is required" in output, (
             f"ENABLE_OPENAI_COMPAT={value} did not trigger validation:\n{output}"
@@ -89,9 +98,10 @@ def test_flag_value_is_case_insensitive():
 
 
 def test_no_validation_error_when_key_present():
-    """With the key supplied, the Mantle guard must not fire."""
+    """With the key supplied, the non-Runtime guard must not fire."""
     result = run_deploy(ENABLE_OPENAI_PASSTHROUGH="true",
-                        BEDROCK_API_KEY="sk-test-key")
+                        MANTLE_ENDPOINT_URL=MANTLE_URL,
+                        BEDROCK_API_KEY="sk-test-key")  # nosec B106 - fake test value
     output = result.stdout + result.stderr
 
     assert "BEDROCK_API_KEY is required" not in output
@@ -125,7 +135,8 @@ class TestEnvLocalLoader:
         env_file = tmp_path / ".env.local"
         env_file.write_text("BEDROCK_API_KEY=key-from-file\n")
 
-        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true")
+        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true",
+                            MANTLE_ENDPOINT_URL=MANTLE_URL)
         output = result.stdout + result.stderr
 
         assert "Loaded deploy secrets" in output
@@ -139,6 +150,7 @@ class TestEnvLocalLoader:
 
         result = run_deploy(env_local=env_file,
                             ENABLE_OPENAI_PASSTHROUGH="true",
+                            MANTLE_ENDPOINT_URL=MANTLE_URL,
                             BEDROCK_API_KEY="key-from-env")
         output = result.stdout + result.stderr
 
@@ -154,7 +166,8 @@ class TestEnvLocalLoader:
             "BEDROCK_API_KEY=\n"          # placeholder, as in the .example file
         )
 
-        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true")
+        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true",
+                            MANTLE_ENDPOINT_URL=MANTLE_URL)
         output = result.stdout + result.stderr
 
         assert "BEDROCK_API_KEY is required" in output, output
@@ -163,7 +176,8 @@ class TestEnvLocalLoader:
         env_file = tmp_path / ".env.local"
         env_file.write_text('  BEDROCK_API_KEY = "quoted-key"  \n')
 
-        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true")
+        result = run_deploy(env_local=env_file, ENABLE_OPENAI_PASSTHROUGH="true",
+                            MANTLE_ENDPOINT_URL=MANTLE_URL)
         output = result.stdout + result.stderr
 
         assert "BEDROCK_API_KEY is required" not in output, output

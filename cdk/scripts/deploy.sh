@@ -84,12 +84,11 @@ CACHE TTL (via environment variables):
     ./scripts/deploy.sh -e prod -p arm64
 
 OPENAI COMPAT / PASSTHROUGH (via environment variables):
-    Enable Bedrock Mantle-backed OpenAI compatibility:
+    Enable OpenAI compatibility via Bedrock Runtime (/openai/v1 in the deploy
+    region, signed with the task role; no API key needed):
 
     ENABLE_OPENAI_COMPAT=true \\
     ENABLE_OPENAI_PASSTHROUGH=true \\
-    BEDROCK_API_KEY=your-bedrock-api-key \\
-    MANTLE_ENDPOINT_URL=https://bedrock-mantle.us-west-2.api.aws/v1 \\
     ./scripts/deploy.sh -e prod -p arm64
 
 OTEL TRACING (via environment variables):
@@ -237,13 +236,23 @@ is_true() {
     esac
 }
 
+# The default upstream is Bedrock Runtime (/openai/v1), which the proxy signs
+# with the task role (SigV4), so no API key is needed. Only an explicit
+# non-Runtime endpoint (e.g. legacy bedrock-mantle) still needs a bearer key.
+OPENAI_UPSTREAM="${MANTLE_ENDPOINT_URL:-${OPENAI_BASE_URL:-}}"
+needs_bearer_key() {
+    case "$1" in
+        '') return 1 ;;                                   # default: Runtime
+        https://bedrock-runtime.*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 if [[ "$DESTROY" != true && -z "${BEDROCK_API_KEY:-}" ]] \
-   && { is_true "${ENABLE_OPENAI_COMPAT:-}" || is_true "${ENABLE_OPENAI_PASSTHROUGH:-}"; }; then
-    if is_true "${ENABLE_OPENAI_COMPAT:-}"; then
-        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_COMPAT=true.${NC}"
-    else
-        echo -e "${RED}Error: BEDROCK_API_KEY is required when ENABLE_OPENAI_PASSTHROUGH=true.${NC}"
-    fi
+   && { is_true "${ENABLE_OPENAI_COMPAT:-}" || is_true "${ENABLE_OPENAI_PASSTHROUGH:-}"; } \
+   && needs_bearer_key "$OPENAI_UPSTREAM"; then
+    echo -e "${RED}Error: BEDROCK_API_KEY is required when MANTLE_ENDPOINT_URL is not a bedrock-runtime endpoint (${OPENAI_UPSTREAM}).${NC}"
+    echo -e "${YELLOW}Unset MANTLE_ENDPOINT_URL to use Bedrock Runtime with task-role SigV4 instead.${NC}"
     if [[ -n "${OPENAI_API_KEY:-}" ]]; then
         echo -e "${YELLOW}OPENAI_API_KEY is deprecated for Bedrock Mantle. Use BEDROCK_API_KEY instead.${NC}"
     fi
