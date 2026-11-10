@@ -1,6 +1,7 @@
 """The generated PTC sandbox runner must embed tool definitions safely."""
 
 import ast
+import json
 
 from app.services.ptc.sandbox import PTCSandboxExecutor
 
@@ -27,12 +28,28 @@ def test_runner_script_is_valid_python():
     ast.parse(_runner(TOOLS))
 
 
+def _tools_info_literal(src: str) -> str:
+    """Return the string literal passed to json.loads() in `TOOLS_INFO = ...`.
+
+    Inspects the generated source with ast only; nothing is executed.
+    """
+    for node in ast.parse(src).body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "TOOLS_INFO" for t in node.targets)
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call)
+            assert isinstance(call.func, ast.Attribute) and call.func.attr == "loads"
+            assert isinstance(call.func.value, ast.Name) and call.func.value.id == "json"
+            (arg,) = call.args
+            assert isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+            return arg.value
+    raise AssertionError("TOOLS_INFO assignment not found")
+
+
 def test_tools_info_round_trips_json_booleans_null_and_quotes():
-    src = _runner(TOOLS)
-    line = next(l for l in src.splitlines() if l.startswith("TOOLS_INFO"))
-    namespace: dict = {}
-    exec("import json\n" + line, namespace)  # noqa: S102 - evaluating our own generated literal
-    assert namespace["TOOLS_INFO"] == TOOLS
+    assert json.loads(_tools_info_literal(_runner(TOOLS))) == TOOLS
 
 
 def test_tool_text_cannot_inject_code():
