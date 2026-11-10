@@ -627,6 +627,17 @@ upstream errors instead of silently retrying a different API.
       ]
     },
     {
+      "Sid": "RuntimeResponsesProject",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:GetInvoke",
+        "bedrock:CancelInvoke",
+        "bedrock:DeleteInvoke"
+      ],
+      "Resource": "arn:aws:bedrock:*:<ACCOUNT_ID>:project/*"
+    },
+    {
       "Sid": "ReadModelMetadata",
       "Effect": "Allow",
       "Action": ["bedrock:GetFoundationModel", "bedrock:GetInferenceProfile"],

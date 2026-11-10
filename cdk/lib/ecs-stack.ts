@@ -212,6 +212,24 @@ export class ECSStack extends cdk.Stack {
         ],
       })
     );
+    // The Runtime Responses API (/openai/v1/responses on bedrock-runtime) also
+    // authorizes bedrock:InvokeModel on the account's project (normally
+    // project/default), and stored-response operations on that project.
+    // Without this, SigV4 calls fail with 401 and CloudTrail shows AccessDenied
+    // on arn:aws:bedrock:<region>:<account>:project/default.
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockRuntimeResponsesProject',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:GetInvoke',
+          'bedrock:CancelInvoke',
+          'bedrock:DeleteInvoke',
+        ],
+        resources: [bedrockAccountArn('project/*')],
+      })
+    );
     taskRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockGetInferenceProfile',

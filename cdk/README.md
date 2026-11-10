@@ -402,7 +402,7 @@ Used by ECS to start containers:
 
 Used by application containers:
 - **DynamoDB:** Read/write to all four tables
-- **Bedrock:** Invoke models (`bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`)
+- **Bedrock:** Invoke models (`bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`), plus `bedrock:InvokeModel`/`GetInvoke`/`CancelInvoke`/`DeleteInvoke` on the account's `project/*`, which the Bedrock Runtime Responses API (`/openai/v1/responses`) authorizes
 - **CloudWatch Logs:** Create log streams and write logs
 
 ## Secrets Management

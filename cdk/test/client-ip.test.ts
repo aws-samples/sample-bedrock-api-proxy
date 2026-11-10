@@ -80,9 +80,15 @@ for (const launchType of ['fargate', 'ec2'] as const) {
         ([] as string[]).concat(st.Action).some(a => a.startsWith('bedrock:Invoke')));
       assert(invoke.length >= 1);
       for (const st of invoke) {
-        assert(Array.isArray(st.Resource), 'invoke resources must be an explicit list');
-        assert(!st.Resource.includes('*'), 'no wildcard resource for bedrock:Invoke*');
+        // CDK renders a single-element Resource list as a scalar.
+        const resources = ([] as unknown[]).concat(st.Resource);
+        assert(!resources.includes('*'), 'no wildcard resource for bedrock:Invoke*');
       }
+      // Runtime Responses (/openai/v1/responses) also authorizes InvokeModel on
+      // the account's project (project/default); without it SigV4 calls get 401.
+      assert(invoke.some((st: any) =>
+        JSON.stringify(st.Resource).includes(':project/*')),
+        'task role must allow bedrock:InvokeModel on project/* for Runtime Responses');
 
       const listeners = Object.values(template.findResources('AWS::ElasticLoadBalancingV2::Listener'));
       assert.equal(listeners.length, 1, 'no alternate unprotected listener');
