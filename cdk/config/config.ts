@@ -21,6 +21,9 @@ export interface EnvironmentConfig {
   // VPC Configuration
   vpcCidr: string;
   maxAzs: number;
+  // Keep the subnet CIDRs of a VPC that was created with maxAzs=3 after
+  // shrinking it to 2 AZs (VPC_LEGACY_3AZ_CIDRS=true). See network-stack.ts.
+  vpcLegacy3AzCidrs?: boolean;
 
   // ECS Configuration
   ecsDesiredCount: number;
@@ -483,6 +486,9 @@ export function getConfig(environmentName: string = 'dev'): EnvironmentConfig {
     enableOpenaiCompat,
     enableOpenaiPassthrough,
     enableCloudFront,
+    ...(process.env.VPC_LEGACY_3AZ_CIDRS && {
+      vpcLegacy3AzCidrs: process.env.VPC_LEGACY_3AZ_CIDRS.toLowerCase() === 'true',
+    }),
     ...((process.env.MANTLE_ENDPOINT_URL || process.env.OPENAI_BASE_URL) && {
       openaiBaseUrl: process.env.MANTLE_ENDPOINT_URL || process.env.OPENAI_BASE_URL,
     }),
